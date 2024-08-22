@@ -96,7 +96,7 @@ def main():
 
         email_subject, body_template = config_result
         email_body = create_forced_auth_email(body_template, args.forced)
-        print(f"[*] Sending forced authentication email to {len(recipients)} target{'s' if len(recipients) > 1 else ''} with SMB path to {args.forced}.")
+        print(f"... Sending forced authentication email to {len(recipients)} target{'s' if len(recipients) > 1 else ''} with SMB path to {args.forced}.")
     else:
         config_result = load_config()
         if config_result is None:
