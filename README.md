@@ -5,8 +5,8 @@ ___
 1. Confirm that the DMARC records are not properly deployed. Ideally policy doesn't exist, or DMARC policy is set to "none". (Still may be possible with "Quarantine", but will surely land in spam.) My go to check is a python3 fork of Spoofcheck: https://github.com/a6avind/spoofcheck
 
 2. Send email using spoofed sender address. (-s can be a single email address or a list of emails. -f is for forced authentication emails, where you'll need to supply your Responder IP as an argument. 
-```zsh
-python3 Spoofit.py --help                                                         
+```
+python3 Spoofit.py
 
    _____                   _____ __ 
   / ___/____  ____  ____  / __(_) /_
@@ -14,19 +14,32 @@ python3 Spoofit.py --help
  ___/ / /_/ / /_/ / /_/ / __/ / /_  
 /____/ .___/\____/\____/_/ /_/\__/  
     /_/                             
+
    
-usage: Spoofit.py [-h] -s SENDER -r RECIPIENTS [-f FORCED]
+usage: Spoofit.py [-h] [-c CHECK] [-s SENDER] [-r RECIPIENTS] [-f FORCED]
 
 Email Spoofing Tool
 
 options:
   -h, --help            show this help message and exit
+  -c CHECK, --check CHECK
+                        Check if a domain is vulnerable to spoofing (SPF, DMARC)
   -s SENDER, --sender SENDER
                         Email address to use as the spoofed sender
   -r RECIPIENTS, --recipients RECIPIENTS
                         Recipient email address or file containing multiple addresses
   -f FORCED, --forced FORCED
                         Optional: Forced authentication email with responder IP
+
+Examples:
+  To check if the target domain is spoofable:
+    Spoofit.py -c <domain.com>
+
+  To send a spoofed email to the target (or list of targets):
+    Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or recipients.txt>
+
+  To send a spoofed email containing an embedded forced authentication image to a target (or list of targets):
+    Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or recipients.txt> -f <responder-ip>
 ```
 ___
 
