@@ -1,5 +1,4 @@
 # Spoofit
-___
 SpoofIt is a Python tool designed to send spoofed emails for security testing. The tool intends to take advantage of situations where a domain's DMARC policy is not set to "reject," allowing spoofed emails to be sent using Microsoft's "direct send" with a higher likelihood of bypassing spam filters and reaching the target's inbox. SpoofIt is ideal for testing the resilience of email security by simulating phishing attacks or sending forced authentication emails, helping organizations identify and address vulnerabilities in their email defenses.
 ___
 ## Usage
