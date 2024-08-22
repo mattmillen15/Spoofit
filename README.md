@@ -14,7 +14,6 @@ python3 Spoofit.py --help
  ___/ / /_/ / /_/ / /_/ / __/ / /_  
 /____/ .___/\____/\____/_/ /_/\__/  
     /_/                             
-  by: Matt Millen and his best bud.   
    
 usage: Spoofit.py [-h] -s SENDER -r RECIPIENTS [-f FORCED]
 
