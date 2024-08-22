@@ -12,7 +12,6 @@ def print_banner():
  ___/ / /_/ / /_/ / /_/ / __/ / /_  
 /____/ .___/\____/\____/_/ /_/\__/  
     /_/                             
-  by: Matt Millen and his best bud.   
    """
     print(banner)
 
