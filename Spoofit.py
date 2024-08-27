@@ -5,6 +5,7 @@ import os
 import configparser
 
 def print_banner():
+    """Prints the ASCII art banner."""
     banner = """
    _____                   _____ __ 
   / ___/____  ____  ____  / __(_) /_
@@ -97,7 +98,7 @@ def check_spoofability(domain):
             elif "p=reject" not in dmarc_record:
                 weaknesses.append("DMARC policy is not set to 'reject'.")
                 spoofable = True
-        except dns.resolver.NoAnswer:
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
             weaknesses.append("No DMARC record found.")
             spoofable = True
 
