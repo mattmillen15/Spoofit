@@ -5,8 +5,8 @@ import os
 import configparser
 
 def print_banner():
-    r"""Prints the ASCII art banner."""
-    banner = """
+    """Prints the ASCII art banner."""
+    banner = r"""
    _____                   _____ __ 
   / ___/____  ____  ____  / __(_) /_
   \__ \/ __ \/ __ \/ __ \/ /_/ / __/
