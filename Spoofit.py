@@ -322,7 +322,7 @@ def parse_tenant_name(domains, fallback_domain):
 def main():
     print_banner()
     parser = argparse.ArgumentParser(
-        description="DMARC-Focused Email Spoofing Tool, with subdomain logic and .gov support",
+        description="DMARC-Focused Email Spoofing Tool.",
         epilog="""
 Examples:
   1) Check domain:
