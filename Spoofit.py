@@ -254,7 +254,7 @@ Examples:
     )
 
     parser.add_argument('-c', '--check', help='Check spoofability for a domain.')
-    parser.add_argument('-t', '--tenant', action='store_true', help='Checks spoofability for all domains in Microsoft tenant.')
+    parser.add_argument('-t', '--tenant', action='store_true', help='Check spoofability for all domains in Microsoft tenant.')
     parser.add_argument('-s', '--sender', help='Spoofed sender email.')
     parser.add_argument('-r', '--recipients', help='Recipient email or file.')
     parser.add_argument('-f', '--forced', help='Forced auth email with Responder IP.')
