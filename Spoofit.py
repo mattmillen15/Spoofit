@@ -358,7 +358,7 @@ Examples:
      Spoofit.py -s sender@domain.com -r recipients.txt
 
   5) Forced authentication:
-     Spoofit.py -s sender@domain.com -r recipient@domain.com -f responder-ip
+     Spoofit.py -s sender@domain.com -r recipient@domain.com -f responder_ip
         """,
         formatter_class=argparse.RawTextHelpFormatter
     )
