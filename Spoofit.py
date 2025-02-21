@@ -190,7 +190,7 @@ def print_summary_table(dmarc_results):
         else:
             spoof_str = "No"
         print(f"{domain:<30} | {policy:<30} | {spoof_str}")
-    print("-" * 70 + "\n")
+    print("-" * 90 + "\n")
 
 def export_results_csv(dmarc_results, filename):
     filtered = [r for r in dmarc_results if not r["domain"].lower().endswith(".onmicrosoft.com")]
