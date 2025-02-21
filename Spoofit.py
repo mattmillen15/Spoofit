@@ -175,9 +175,9 @@ def print_summary_table(dmarc_results):
         return
 
     print("\nFinal DMARC Summary (excluding .onmicrosoft.com):")
-    print("-" * 70)
-    print(f"{'Domain':<30} | {'DMARC Policy':<30} | Spoofable?")
-    print("-" * 70)
+    print("-" * 90)
+    print(f"{'Domain':<30} | {'DMARC Policy':<30} | {'Spoofing Possible?'::<10}")
+    print("-" * 90)
 
     for res in filtered:
         domain = res["domain"]
@@ -200,7 +200,7 @@ def export_results_csv(dmarc_results, filename):
     try:
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(["Domain", "DMARC Policy", "Spoofable"])
+            writer.writerow(["Domain", "DMARC Policy", "Spoofing Possible?"])
             for r in filtered:
                 if r["spoofable"]:
                     if "quarantine" in r["policy"].lower():
