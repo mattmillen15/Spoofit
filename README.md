@@ -12,32 +12,36 @@ python3 Spoofit.py
  ___/ / /_/ / /_/ / /_/ / __/ / /_  
 /____/ .___/\____/\____/_/ /_/\__/  
     /_/                             
-
    
-usage: Spoofit.py [-h] [-c CHECK] [-s SENDER] [-r RECIPIENTS] [-f FORCED]
+Usage: Spoofit.py [-h] [-c CHECK] [-t] [-s SENDER] [-r RECIPIENTS] [-f FORCED] 
 
-Email Spoofing Tool
+DMARC Focused Email Spoofing Tool
 
 options:
   -h, --help            show this help message and exit
   -c CHECK, --check CHECK
-                        Check if a domain is vulnerable to spoofing (SPF, DMARC)
+                        Check spoofability for a domain.
+  -t, --tenant          Checks spoofability for all domains in Microsoft tenant.
   -s SENDER, --sender SENDER
-                        Email address to use as the spoofed sender
+                        Spoofed sender email.
   -r RECIPIENTS, --recipients RECIPIENTS
-                        Recipient email address or file containing multiple addresses
+                        Recipient email or file.
   -f FORCED, --forced FORCED
-                        Optional: Forced authentication email with responder IP
+                        Forced auth email with Responder IP.
 
 Examples:
-  To check if the target domain is spoofable:
-    Spoofit.py -c <domain.com>
+  1) Check Spoofability of domain via missing DMARC records:
+     Spoofit.py -c example.com
 
-  To send a spoofed email to the target (or list of targets):
-    Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or recipients.txt>
+  2) Check Spoofability for all domains in Microsoft tenant (automatically saves CSV):
+     Spoofit.py -c example.com -t
 
-  To send a spoofed email containing an embedded forced authentication image to a target (or list of targets):
-    Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or recipients.txt> -f <responder-ip>
+  3) Send spoofed email:
+     Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or file.txt>
+
+  4) Forced-auth:
+     Spoofit.py -s <sender@domain.com> -r <recipient@domain.com> -f <responder-ip>
+
 ```
 ___
 
