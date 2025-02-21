@@ -235,13 +235,13 @@ def main():
     print_banner()
 
     parser = argparse.ArgumentParser(
-        description="Email Spoofing Tool (DMARC-focused) with optional M365 tenant enumeration",
+        description="DMARC Focused Email Spoofing Tool",
         epilog="""
 Examples:
-  1) Check DMARC:
+  1) Check Spoofability of domain via missing DMARC records:
      Spoofit.py -c example.com
 
-  2) Tenant check (automatically saves CSV):
+  2) Check Spoofability for all domains in Microsoft tenant (automatically saves CSV):
      Spoofit.py -c example.com -t
 
   3) Send spoofed email:
@@ -253,8 +253,8 @@ Examples:
         formatter_class=argparse.RawTextHelpFormatter
     )
 
-    parser.add_argument('-c', '--check', help='Check DMARC spoofability for a domain.')
-    parser.add_argument('-t', '--tenant', action='store_true', help='Enumerate entire tenant for domain.')
+    parser.add_argument('-c', '--check', help='Check spoofability for a domain.')
+    parser.add_argument('-t', '--tenant', action='store_true', help='Checks spoofability for all domains in Microsoft tenant.')
     parser.add_argument('-s', '--sender', help='Spoofed sender email.')
     parser.add_argument('-r', '--recipients', help='Recipient email or file.')
     parser.add_argument('-f', '--forced', help='Forced auth email with Responder IP.')
