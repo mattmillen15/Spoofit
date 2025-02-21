@@ -92,7 +92,7 @@ def check_spoofability(domain):
             result["policy"] = "p=reject (fully enforced)"
         elif dmarc_record and "p=quarantine" in dmarc_record:
             print(f"{YELLOW}[!] DMARC record p=quarantine for {domain} (partial).{RESET}")
-            print(f"{GREEN}[+] Spoofing might slip through if spam is recovered.{RESET}")
+            print(f"{YELLOW}[+] Spoofing email will likely land in spam (user action required).{RESET}")
             result["policy"] = "p=quarantine (partial)"
             result["spoofable"] = True
         elif dmarc_record and "p=none" in dmarc_record:
@@ -184,7 +184,7 @@ def print_summary_table(dmarc_results):
         policy = res["policy"]
         if res["spoofable"]:
             if "quarantine" in policy.lower():
-                spoof_str = f"{YELLOW}Maybe{RESET}"
+                spoof_str = "Doubtful"
             else:
                 spoof_str = f"{GREEN}Yes{RESET}"
         else:
@@ -204,7 +204,7 @@ def export_results_csv(dmarc_results, filename):
             for r in filtered:
                 if r["spoofable"]:
                     if "quarantine" in r["policy"].lower():
-                        spoof = "Maybe"
+                        spoof = "Doubtful"
                     else:
                         spoof = "Yes"
                 else:
