@@ -13,34 +13,38 @@ python3 Spoofit.py
 /____/ .___/\____/\____/_/ /_/\__/  
     /_/                             
    
-Usage: Spoofit.py [-h] [-c CHECK] [-t] [-s SENDER] [-r RECIPIENTS] [-f FORCED] 
+usage: Spoofit.py [-h] [-d DOMAIN] [-t] [-s SENDER] [-r RECIPIENTS] [-f RESPONDER_IP]
 
-DMARC Focused Email Spoofing Tool
+DMARC-Focused Email Spoofing Tool.
 
 options:
   -h, --help            show this help message and exit
-  -c CHECK, --check CHECK
+  -d DOMAIN, --domain DOMAIN
                         Check spoofability for a domain.
-  -t, --tenant          Checks spoofability for all domains in Microsoft tenant.
+  -t, --tenant          Check entire Microsoft tenant.
   -s SENDER, --sender SENDER
                         Spoofed sender email.
   -r RECIPIENTS, --recipients RECIPIENTS
-                        Recipient email or file.
-  -f FORCED, --forced FORCED
-                        Forced auth email with Responder IP.
+                        Recipient email or file containing list of recipient emails.
+  -f RESPONDER_IP, --forced RESPONDER_IP
+                        Send email with embedded image pointing to Responder.
 
 Examples:
-  1) Check Spoofability of domain via missing DMARC records:
-     Spoofit.py -c example.com
 
-  2) Check Spoofability for all domains in Microsoft tenant (automatically saves CSV):
-     Spoofit.py -c example.com -t
+  1) Check domain:
+     Spoofit.py -d domain.com
 
-  3) Send spoofed email:
-     Spoofit.py -s <sender@domain.com> -r <recipient@domain.com or file.txt>
+  2) Check entire tenant (auto-saves CSV):
+     Spoofit.py -d domain.com -t
 
-  4) Forced-auth:
-     Spoofit.py -s <sender@domain.com> -r <recipient@domain.com> -f <responder-ip>
+  3) Send a spoofed email (single recipient):
+     Spoofit.py -s sender@domain.com -r recipient@domain.com
+
+  4) Send a spoofed email (multiple recipients from file):
+     Spoofit.py -s sender@domain.com -r recipients.txt
+
+  5) Forced authentication:
+     Spoofit.py -s sender@domain.com -r recipient@domain.com -f responder_ip
 
 ```
 ___
