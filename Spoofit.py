@@ -27,12 +27,22 @@ def get_domain_from_email(email):
 def get_mx_record(domain):
     try:
         answers = dns.resolver.resolve(domain, 'MX')
-        mx_record = min(answers, key=lambda r: r.preference).exchange.to_text()
-        return mx_record
+        mx_record = min(answers, key=lambda r: r.preference).exchange.to_text().strip()
+
+        # Resolve MX record to IPv4 only
+        ipv4_addresses = []
+        for rdata in dns.resolver.resolve(mx_record, 'A'):
+            ipv4_addresses.append(rdata.to_text())
+
+        if ipv4_addresses:
+            return ipv4_addresses[0]  # Return the first IPv4 address found
+        else:
+            print(f"[!] No IPv4 address found for {mx_record}.")
+            return None
     except Exception as e:
         print(f"[!] Error retrieving MX record for {domain}: {e}")
         return None
-
+        
 def send_email(mx_record, sender, recipient, subject, body):
     """
     Attempts direct-to-MX delivery of an email.
