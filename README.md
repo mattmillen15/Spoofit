@@ -13,29 +13,27 @@ python3 Spoofit.py
 /____/ .___/\____/\____/_/ /_/\__/  
     /_/                             
    
-usage: Spoofit.py [-h] [-d DOMAIN] [-t] [-s SENDER] [-r RECIPIENTS] [-f RESPONDER_IP]
+usage: Spoofit.py [-h] [-t TARGET] [-o OUTPUT] [-s SENDER] [-r RECIPIENTS] [-f RESPONDER_IP]
 
 DMARC-Focused Email Spoofing Tool.
 
 options:
   -h, --help            show this help message and exit
-  -d DOMAIN, --domain DOMAIN
-                        Check spoofability for a domain.
-  -t, --tenant          Check entire Microsoft tenant.
-  -s SENDER, --sender SENDER
-                        Spoofed sender email.
-  -r RECIPIENTS, --recipients RECIPIENTS
+  -t, --target TARGET   Target domain or file containing list of domains to check.
+  -o, --output OUTPUT   Output CSV filename (optional, auto-generated if not specified).
+  -s, --sender SENDER   Spoofed sender email.
+  -r, --recipients RECIPIENTS
                         Recipient email or file containing list of recipient emails.
-  -f RESPONDER_IP, --forced RESPONDER_IP
-                        Send email with embedded image pointing to Responder.
+  -f, --forced RESPONDER_IP
+                        Forced authentication with responder-ip.
 
 Examples:
 
-  1) Check domain:
-     Spoofit.py -d domain.com
+  1) Check single domain:
+     Spoofit.py -t domain.com
 
-  2) Check entire tenant (auto-saves CSV):
-     Spoofit.py -d domain.com -t
+  2) Check multiple domains from file:
+     Spoofit.py -t domains.txt -o results.csv
 
   3) Send a spoofed email (single recipient):
      Spoofit.py -s sender@domain.com -r recipient@domain.com
@@ -44,8 +42,7 @@ Examples:
      Spoofit.py -s sender@domain.com -r recipients.txt
 
   5) Forced authentication:
-     Spoofit.py -s sender@domain.com -r recipient@domain.com -f responder_ip
-
+     Spoofit.py -s sender@domain.com -r recipient@domain.com -f responder-ip
 ```
 ___
 
