@@ -1,5 +1,10 @@
 # Spoofit
 SpoofIt is designed to send spoofed emails for security testing. The tool intends to take advantage of situations where a domain's DMARC policy is not set to "reject," allowing spoofed emails to be sent using Microsoft's "direct send" with a higher likelihood of bypassing spam filters and reaching the target's inbox.
+
+## Update 10/3/2025
+Unauthenticated enumeration of Microsoft tenants is essentially broken -- breaking the portion of this tool that would enumerate domains in a target tenant. The tool has been modified to take a list of domains with the "-t" flag. To obtain a list of domains in the target tenant, use one of the following: 
+- https://micahvandeusen.com/tools/tenant-domains/
+- https://osint.aadinternals.com/
 ___
 ## Usage
 
