@@ -4,9 +4,6 @@ import dns.resolver
 import argparse
 import os
 import configparser
-import xml.etree.ElementTree as ET
-from urllib.request import urlopen, Request
-from urllib.error import HTTPError, URLError
 import csv
 import tldextract
 
@@ -104,9 +101,23 @@ def is_subdomain(domain):
     org_domain = f"{extracted.domain}.{extracted.suffix}"
     return domain.lower() != org_domain.lower()
 
+def has_mx_record(domain):
+    """
+    Checks if a domain has any MX records.
+    Returns True if MX records exist, False otherwise.
+    """
+    try:
+        dns.resolver.resolve(domain, 'MX')
+        return True
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers):
+        return False
+    except Exception:
+        return False
+
 def check_spoofability(domain):
     """
     Checks if 'domain' can be spoofed based on DMARC:
+    - First checks if domain has MX records (no MX = not spoofable)
     - If p=reject => not spoofable
     - If p=quarantine => partial (Doubtful)
     - If p=none or no DMARC => likely spoofable
@@ -121,6 +132,11 @@ def check_spoofability(domain):
     result = {"domain": domain, "policy": "", "spoofable": False}
 
     try:
+        # First, check if the domain has MX records
+        if not has_mx_record(domain):
+            print(f"{RED}[-] {domain} has no MX records (cannot receive email).{RESET}")
+            result["policy"] = "No MX record"
+            return result
         # Attempt to retrieve a DMARC record for the domain
         try:
             dmarc_answer = dns.resolver.resolve(f"_dmarc.{domain}", "TXT")
@@ -214,82 +230,26 @@ def check_spoofability(domain):
 
     return result
 
-def autodiscover_endpoint(domain):
-    if domain.lower().endswith(".gov"):
-        return "https://autodiscover-s.office365.us/autodiscover/autodiscover.svc"
-    return "https://autodiscover-s.outlook.com/autodiscover/autodiscover.svc"
-
-def enumerate_tenant_domains(domain):
-    body = f"""<?xml version="1.0" encoding="utf-8"?>
-    <soap:Envelope xmlns:exm="http://schemas.microsoft.com/exchange/services/2006/messages"
-        xmlns:ext="http://schemas.microsoft.com/exchange/services/2006/types"
-        xmlns:a="http://www.w3.org/2005/08/addressing"
-        xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-        <soap:Header>
-            <a:RequestedServerVersion>Exchange2010</a:RequestedServerVersion>
-            <a:MessageID>urn:uuid:1234abcd-9e05-465e-ade9-aae14c4bcd10</a:MessageID>
-            <a:Action soap:mustUnderstand="1">
-              http://schemas.microsoft.com/exchange/2010/Autodiscover/Autodiscover/GetFederationInformation
-            </a:Action>
-            <a:To soap:mustUnderstand="1">
-              {autodiscover_endpoint(domain)}
-            </a:To>
-            <a:ReplyTo>
-                <a:Address>http://www.w3.org/2005/08/addressing/anonymous</a:Address>
-            </a:ReplyTo>
-        </soap:Header>
-        <soap:Body>
-            <GetFederationInformationRequestMessage xmlns="http://schemas.microsoft.com/exchange/2010/Autodiscover">
-                <Request>
-                    <Domain>{domain}</Domain>
-                </Request>
-            </GetFederationInformationRequestMessage>
-        </soap:Body>
-    </soap:Envelope>"""
-    headers = {"Content-Type": "text/xml; charset=utf-8", "User-Agent": "AutodiscoverClient"}
-    url = autodiscover_endpoint(domain)
-
-    try:
-        request = Request(url, data=body.encode(), headers=headers)
-        with urlopen(request) as response:
-            xml_data = response.read().decode()
-    except (HTTPError, URLError) as e:
-        print(f"[!] Error performing Autodiscover: {e}")
-        return []
-
-    domains_found = []
-    try:
-        root = ET.fromstring(xml_data)
-        namespace = "{http://schemas.microsoft.com/exchange/2010/Autodiscover}"
-        for elem in root.iter():
-            if elem.tag == f"{namespace}Domain":
-                if elem.text and elem.text.strip():
-                    domains_found.append(elem.text.strip())
-    except Exception as e:
-        print(f"[!] Error parsing Autodiscover XML: {e}")
-        return []
-    return list(set(domains_found))
-
 def print_summary_table(dmarc_results):
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
+    RED = "\033[91m"
     RESET = "\033[0m"
 
-    filtered = [r for r in dmarc_results if not r["domain"].lower().endswith(".onmicrosoft.com")]
-    if not filtered:
-        print("[!] No domains to display in summary table (all onmicrosoft?).")
+    if not dmarc_results:
+        print("[!] No domains to display in summary table.")
         return
 
-    print("\nFinal DMARC Summary (excluding .onmicrosoft.com):")
-    print("-" * 100)
-    print(f"{'Domain':<34} | {'DMARC Policy':<32} | {'Spoofing Possible'}")
-    print("-" * 100)
+    print("\nFinal Summary:")
+    print("-" * 95)
+    print(f"{'Domain':<35} | {'Notes':<35} | {'Spoofing Possible'}")
+    print("-" * 95)
 
-    for res in filtered:
+    for res in dmarc_results:
         domain = res["domain"]
         policy = res["policy"]
+        notes = policy
+        
         if res["spoofable"]:
             if "quarantine" in policy.lower():
                 spoof_str = "Doubtful"
@@ -301,21 +261,22 @@ def print_summary_table(dmarc_results):
         else:
             spoof_str = "No"
 
-        print(f"{domain:<34} | {policy:<32} | {spoof_str}")
-    print("-" * 100 + "\n")
+        print(f"{domain:<35} | {notes:<35} | {spoof_str}")
+    print("-" * 95 + "\n")
 
 def export_results_csv(dmarc_results, filename):
-    filtered = [r for r in dmarc_results if not r["domain"].lower().endswith(".onmicrosoft.com")]
-    if not filtered:
-        print(f"[!] No results to export to {filename} (all onmicrosoft?).")
+    if not dmarc_results:
+        print(f"[!] No results to export to {filename}.")
         return
     try:
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(["Domain", "DMARC Policy", "Spoofing Possible"])
-            for r in filtered:
+            writer.writerow(["Domain", "Has MX", "DMARC Policy", "Spoofing Possible"])
+            for r in dmarc_results:
                 domain = r["domain"]
+                has_mx = "Yes" if r.get("has_mx", True) else "No"  # Default to True for backwards compatibility
                 policy = r["policy"]
+                
                 if r["spoofable"]:
                     if "quarantine" in policy.lower():
                         spoof = "Doubtful"
@@ -326,20 +287,24 @@ def export_results_csv(dmarc_results, filename):
                             spoof = "Yes"
                 else:
                     spoof = "No"
-                writer.writerow([domain, policy, spoof])
-        print(f"[+] Exported DMARC results to {filename}")
+                writer.writerow([domain, has_mx, policy, spoof])
+        print(f"[+] Exported results to {filename}")
     except Exception as e:
         print(f"[!] Error exporting to {filename}: {e}")
 
-def parse_tenant_name(domains, fallback_domain):
-    onmicrosoft = [d for d in domains if d.lower().endswith(".onmicrosoft.com")]
-    if onmicrosoft:
-        raw = onmicrosoft[0].lower()
-        raw = raw.replace(".onmicrosoft.com", "")
-        raw = raw.split('.', 1)[0]
-        return f"{raw}_spoofit_results.csv"
-    else:
-        return fallback_domain.replace('.', '_') + "_spoofit_results.csv"
+def load_domains_from_file(filepath):
+    """Load domains from a text file, one domain per line."""
+    domains = []
+    try:
+        with open(filepath, 'r') as f:
+            for line in f:
+                domain = line.strip()
+                if domain and not domain.startswith('#'):
+                    domains.append(domain)
+        return domains
+    except Exception as e:
+        print(f"[!] Error reading domains from {filepath}: {e}")
+        return []
 
 def main():
     print_banner()
@@ -348,11 +313,11 @@ def main():
         epilog="""
 Examples:
 
-  1) Check domain:
-     Spoofit.py -d domain.com
+  1) Check single domain:
+     Spoofit.py -t domain.com
 
-  2) Check entire tenant (auto-saves CSV):
-     Spoofit.py -d domain.com -t
+  2) Check multiple domains from file:
+     Spoofit.py -t domains.txt -o results.csv
 
   3) Send a spoofed email (single recipient):
      Spoofit.py -s sender@domain.com -r recipient@domain.com
@@ -366,8 +331,8 @@ Examples:
         formatter_class=argparse.RawTextHelpFormatter
     )
 
-    parser.add_argument('-d', '--domain', help='Check spoofability for a domain.')
-    parser.add_argument('-t', '--tenant', action='store_true', help='Check entire Microsoft tenant.')
+    parser.add_argument('-t', '--target', help='Target domain or file containing list of domains to check.')
+    parser.add_argument('-o', '--output', help='Output CSV filename (optional, auto-generated if not specified).')
     parser.add_argument('-s', '--sender', help='Spoofed sender email.')
     parser.add_argument('-r', '--recipients', help='Recipient email or file containing list of recipient emails.')
     parser.add_argument('-f', '--forced', metavar='RESPONDER_IP',
@@ -379,24 +344,21 @@ Examples:
         return
 
     # 1) Domain check logic (DMARC checks)
-    if args.domain:
+    if args.target:
         dmarc_results = []
-        domains_to_check = [args.domain]
+        domains_to_check = []
 
-        if args.tenant:
-            all_domains = enumerate_tenant_domains(args.domain)
-            csv_filename = parse_tenant_name(all_domains, args.domain)
-            tenant_domains = [d for d in all_domains if not d.lower().endswith(".onmicrosoft.com")]
-            if tenant_domains:
-                print(f"[+] Tenant domains discovered for {args.domain} (excluding .onmicrosoft.com):")
-                for dom in tenant_domains:
-                    print(f"  - {dom}")
-                print("\nRunning DMARC checks on each discovered domain:\n")
-                domains_to_check = tenant_domains
-            else:
-                print("[-] No additional tenant domains found or all .onmicrosoft.com.")
-                print(f"Checking only {args.domain}.\n")
-                csv_filename = parse_tenant_name([], args.domain)
+        # Check if target is a file or a single domain
+        if os.path.isfile(args.target):
+            domains_to_check = load_domains_from_file(args.target)
+            if not domains_to_check:
+                print("[!] No valid domains found in file.")
+                return
+            print(f"[+] Loaded {len(domains_to_check)} domain(s) from {args.target}")
+        else:
+            domains_to_check = [args.target]
+
+        print(f"\n[*] Running DMARC checks on {len(domains_to_check)} domain(s):\n")
 
         for dom in domains_to_check:
             res = check_spoofability(dom)
@@ -404,8 +366,18 @@ Examples:
 
         print_summary_table(dmarc_results)
 
-        if args.tenant:
-            export_results_csv(dmarc_results, csv_filename)
+        # Export to CSV
+        if args.output:
+            csv_filename = args.output
+        else:
+            # Auto-generate filename based on first domain or input file
+            if os.path.isfile(args.target):
+                base = os.path.splitext(os.path.basename(args.target))[0]
+                csv_filename = f"{base}_spoofit_results.csv"
+            else:
+                csv_filename = args.target.replace('.', '_') + "_spoofit_results.csv"
+        
+        export_results_csv(dmarc_results, csv_filename)
         return
 
     # 2) Sending spoofed emails
@@ -429,7 +401,7 @@ Examples:
             if not cfg:
                 return
             subject, body = cfg
-            print(f"...Sending spoofed email to {len(recipients)} recipients.")
+            print(f"[*] Sending spoofed email to {len(recipients)} recipients.")
 
         domain = get_domain_from_email(args.sender)
         mx_record = get_mx_record(domain)
