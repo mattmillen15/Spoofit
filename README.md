@@ -84,6 +84,18 @@ After a scan, the post-scan menu offers:
 
 ---
 
+## Vulnerabilities
+
+Each finding Spoofit identifies is documented in the `docs/` folder:
+
+| Finding | Description | Doc |
+|---|---|---|
+| DMARC Spoofing | Missing or permissive DMARC policy allows forging the From address | [docs/dmarc_spoofing.md](docs/dmarc_spoofing.md) |
+| EOP Direct Send | Exchange Online accepts inbound mail directly, bypassing third-party gateway | [docs/eop_direct_send.md](docs/eop_direct_send.md) |
+| Open Relay | MX server forwards mail for unauthenticated external senders to external recipients | [docs/open_relay.md](docs/open_relay.md) |
+
+---
+
 ## Configuration
 
 Edit `conf/spoofit.conf` for default email subject and body. The forced authentication template is at `conf/forced_auth_template.html` — set the responder IP at runtime with `-f`.
