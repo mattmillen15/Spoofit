@@ -34,8 +34,6 @@
 ## Planned
 
 ### v1.4 — Extended Protocol Analysis
-- [ ] **SPF deep analysis**: detect `+all` (open relay), missing SPF, `~all` vs `-all` distinction, `?all`
-- [ ] **DKIM record check**: confirm DKIM selectors exist (`selector1/selector2._domainkey`), flag missing DKIM
 - [ ] **MTA-STS policy check**: detect domains enforcing MTA-STS (RFC 8461) which prevents STARTTLS stripping
 - [ ] **BIMI record check**: presence/absence of `default._bimi` (informational)
 - [ ] **Email gateway fingerprinting**: detect Proofpoint, Mimecast, Barracuda, Cisco IronPort by MX hostname pattern, banner, or headers
@@ -56,7 +54,6 @@
 
 ### Long-term / Research
 - [ ] **DMARC alignment bypass techniques**: `From:` header edge cases, IDN homographs, whitespace tricks
-- [ ] **SPF `+all` exploit path**: demonstrate relay from a permitted IP range
 - [ ] **Internal relay via onmicrosoft.com**: test whether misconfigured tenant relay allows spoofed From headers that appear internal
 - [ ] **ARC (Authenticated Received Chain) analysis**: determine whether forwarders break DMARC and whether ARC sealing is present
 - [ ] **Catch-all address detection**: identify if target domain accepts mail for any recipient
