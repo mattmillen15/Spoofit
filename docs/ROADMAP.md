@@ -41,10 +41,10 @@
 - [ ] **STARTTLS support**: some servers reject unencrypted SMTP connections
 
 ### v1.4 — Tenant & Infrastructure Enumeration
-- [ ] **Improved onmicrosoft.com tenant discovery**: more reliable post-API-change techniques (e.g., getrealm API, autodiscover parsing, federation metadata XML)
+- [x] **onmicrosoft.com discovery via azmap.dev**: `GET /api/tenant?domain=X` returns `tenant_name` directly; replaces broken Microsoft API methods
+- [ ] **Full tenant domain sweep via azmap.dev**: `related_domains` in the azmap.dev response lists every domain in the tenant — wire this into `-t` so passing one domain auto-discovers and checks all tenant domains
 - [ ] **Generic SMTP relay test**: beyond EOP — test any discovered SMTP server for open relay (`RCPT TO:<external>` from external sender)
 - [ ] **Email gateway fingerprinting**: detect Proofpoint, Mimecast, Barracuda, Cisco IronPort by MX hostname pattern, banner, or headers
-- [ ] **Tenant domain enumeration**: attempt re-implementation of M365 tenant domain enumeration given ongoing API changes
 
 ### v1.5 — Output & Integration
 - [ ] **JSON output format**: machine-readable output for integration with reporting pipelines

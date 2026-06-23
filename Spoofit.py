@@ -77,6 +77,25 @@ def get_primary_mx_hostname(domain):
         return ""
 
 def get_onmicrosoft_domain(domain):
+    """
+    Discovers the tenant's .onmicrosoft.com domain.
+    Primary: azmap.dev API returns tenant_name directly.
+    Fallback 1: DNS guess on the domain label.
+    Fallback 2: Microsoft OpenID Connect discovery endpoint.
+    """
+    # azmap.dev — most reliable post-Microsoft API deprecations
+    try:
+        url = f"https://azmap.dev/api/tenant?domain={domain}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+            tenant_name = data.get("tenant_name", "")
+            if tenant_name:
+                return f"{tenant_name}.onmicrosoft.com"
+    except Exception:
+        pass
+
+    # DNS guess — works when tenant name matches the domain label
     extracted = tldextract.extract(domain)
     guessed = f"{extracted.domain}.onmicrosoft.com"
     try:
@@ -84,6 +103,8 @@ def get_onmicrosoft_domain(domain):
         return guessed
     except Exception:
         pass
+
+    # Microsoft OpenID Connect endpoint
     try:
         url = f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -96,6 +117,7 @@ def get_onmicrosoft_domain(domain):
                         return m.group(1)
     except Exception:
         pass
+
     return None
 
 def check_eop_direct_send(domain):
