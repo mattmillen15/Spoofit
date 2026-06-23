@@ -22,7 +22,7 @@ BOLD   = "\033[1m"
 DIM    = "\033[2m"
 RESET  = "\033[0m"
 
-W = 74  # output width
+W = 82  # output width
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -206,6 +206,58 @@ def check_eop_direct_send(domain):
 
     return result
 
+def check_open_relay(domain):
+    """
+    Probe every MX server for the domain for open relay.
+    Tests external-to-external envelope (MAIL FROM + RCPT TO, no DATA).
+    Returns list of dicts: {hostname, preference, ip, open_relay, notes}
+    """
+    results = []
+    try:
+        mx_records = sorted(dns.resolver.resolve(domain, "MX"), key=lambda r: r.preference)
+    except Exception:
+        return results
+
+    for rdata in mx_records:
+        hostname   = rdata.exchange.to_text().rstrip(".")
+        preference = rdata.preference
+        entry = {"hostname": hostname, "preference": preference,
+                 "ip": None, "open_relay": False, "notes": ""}
+
+        try:
+            entry["ip"] = dns.resolver.resolve(hostname, "A")[0].to_text()
+        except Exception as e:
+            entry["notes"] = f"DNS: {e}"
+            results.append(entry)
+            continue
+
+        try:
+            with smtplib.SMTP(timeout=10) as server:
+                server.connect(entry["ip"], 25)
+                server.ehlo_or_helo_if_needed()
+                code, msg = server.mail("probe@spoofit.invalid")
+                if code == 250:
+                    code2, msg2 = server.rcpt("probe@relay-test.invalid")
+                    server.rset()
+                    server.quit()
+                    m2 = msg2.decode() if isinstance(msg2, bytes) else str(msg2)
+                    if code2 == 250:
+                        entry["open_relay"] = True
+                        entry["notes"] = "External→external envelope accepted"
+                    else:
+                        entry["notes"] = m2.strip()[:70]
+                else:
+                    m = msg.decode() if isinstance(msg, bytes) else str(msg)
+                    entry["notes"] = m.strip()[:70]
+        except smtplib.SMTPConnectError:
+            entry["notes"] = "Connection refused"
+        except Exception as e:
+            entry["notes"] = str(e)[:70]
+
+        results.append(entry)
+
+    return results
+
 # ── Email ───────────────────────────────────────────────────────────────────
 def send_email(smtp_host, sender, recipient, subject, body):
     try:
@@ -306,6 +358,19 @@ def print_domain_result(res, n=None, total=None):
         short = notes[:55] + ".." if len(notes) > 57 else notes
         print(f"  {'EOP':<8}  {DIM}{short}{RESET}")
 
+    # MX open relay rows
+    for i, mx in enumerate(res.get("relay_results", [])):
+        prefix = "MX" if i == 0 else ""
+        host_str = f"{mx['hostname']} ({mx['preference']})"
+        if mx["ip"]:
+            status = (f"{RED}{BOLD}→ OPEN RELAY{RESET}" if mx["open_relay"]
+                      else f"{GREEN}→ Closed{RESET}")
+            print(f"  {prefix:<8}  {host_str}")
+            print(f"  {'':10}{mx['ip']}  {status}")
+        else:
+            h = host_str[:55] + ".." if len(host_str) > 57 else host_str
+            print(f"  {prefix:<8}  {h}  {DIM}{mx['notes']}{RESET}")
+
     if res.get("onmicrosoft_domain"):
         print(f"  {'Tenant':<8}  {res['onmicrosoft_domain']}")
 
@@ -313,21 +378,36 @@ def print_summary_table(results):
     if not results:
         return
     print(f"\n{'═' * W}")
-    print(f"  {'DOMAIN':<36} {'DMARC':<22} {'RISK':<12} EOP")
+    print(f"  {'DOMAIN':<32} {'DMARC':<20} {'RISK':<11} {'EOP':<8} RELAY")
     print(f"{'─' * W}")
     for r in results:
         domain = r["domain"]
         policy = r["policy"]
         label, color = risk_label(r)
         eop = r.get("eop_direct_send")
-        eop_str   = f"{RED}{BOLD}OPEN{RESET}" if eop is True else (
-                    f"{GREEN}Closed{RESET}" if eop is False else "─")
+        eop_str   = f"{RED}{BOLD}OPEN{RESET}"   if eop is True  else (
+                    f"{GREEN}Closed{RESET}"      if eop is False else "─")
         eop_label = "OPEN" if eop is True else ("Closed" if eop is False else "─")
-        d = (domain[:34] + "..") if len(domain) > 36 else domain
-        p = (policy[:20] + "..") if len(policy) > 22 else policy
-        sys.stdout.write(f"  {d:<36} {p:<22} {color}{label}{RESET}")
-        sys.stdout.write(" " * max(0, 12 - len(label)))
-        sys.stdout.write(f" {eop_str}\n")
+
+        relay_hits = [m for m in r.get("relay_results", []) if m["open_relay"]]
+        total_mx   = len(r.get("relay_results", []))
+        if relay_hits:
+            relay_str   = f"{RED}{BOLD}OPEN ({len(relay_hits)}/{total_mx}){RESET}"
+            relay_label = f"OPEN ({len(relay_hits)}/{total_mx})"
+        elif total_mx:
+            relay_str   = f"{GREEN}Clean{RESET}"
+            relay_label = "Clean"
+        else:
+            relay_str   = "─"
+            relay_label = "─"
+
+        d = (domain[:30] + "..") if len(domain) > 32 else domain
+        p = (policy[:18] + "..") if len(policy) > 20 else policy
+        sys.stdout.write(f"  {d:<32} {p:<20} {color}{label}{RESET}")
+        sys.stdout.write(" " * max(0, 11 - len(label)))
+        sys.stdout.write(f" {eop_str}")
+        sys.stdout.write(" " * max(0, 8 - len(eop_label)))
+        sys.stdout.write(f" {relay_str}\n")
     print(f"{'═' * W}")
 
 def print_critical_findings(results):
@@ -342,6 +422,10 @@ def print_critical_findings(results):
         elif r["spoofable"] and "quarantine" in r["policy"].lower():
             items.append((YELLOW, "DMARC QUARANTINE", r["domain"],
                 "Spoofed mail may reach spam folder"))
+        for mx in r.get("relay_results", []):
+            if mx["open_relay"]:
+                items.append((RED, "OPEN RELAY", r["domain"],
+                    f"{mx['hostname']} ({mx['preference']})  {mx['ip']}"))
     if not items:
         print(f"\n  {GREEN}No exploitable findings.{RESET}")
         return
@@ -361,10 +445,15 @@ def export_results_csv(results, filename):
             w = csv.writer(f)
             w.writerow(["Domain", "DMARC Policy", "Spoofable", "Risk",
                         "O365", "EOP Host", "EOP Direct Send", "EOP Notes",
-                        "OnMicrosoft Domain"])
+                        "OnMicrosoft Domain", "MX Open Relay", "Relay Detail"])
             for r in results:
                 label, _ = risk_label(r)
                 eop_d = r.get("eop_direct_send")
+                relay = r.get("relay_results", [])
+                open_relays = [m for m in relay if m["open_relay"]]
+                relay_detail = "; ".join(
+                    f"{m['hostname']} ({m['ip']})" for m in open_relays
+                ) if open_relays else ""
                 w.writerow([
                     r["domain"], r["policy"],
                     "Yes" if r["spoofable"] else "No",
@@ -373,7 +462,9 @@ def export_results_csv(results, filename):
                     r.get("eop_host", ""),
                     "Open" if eop_d is True else ("Closed" if eop_d is False else "N/A"),
                     r.get("eop_notes", ""),
-                    r.get("onmicrosoft_domain", "")
+                    r.get("onmicrosoft_domain", ""),
+                    f"{len(open_relays)}/{len(relay)}" if relay else "N/A",
+                    relay_detail
                 ])
         print(f"\n  {GREEN}[+]{RESET} Exported to {filename}")
     except Exception as e:
@@ -392,8 +483,10 @@ def run_scan(domains):
         eop           = check_eop_direct_send(dom)
         res["eop_host"]        = eop["eop_host"]
         res["eop_ip"]          = eop["eop_ip"]
+        res["resolves"]        = eop["resolves"]
         res["eop_direct_send"] = eop["direct_send_open"]
         res["eop_notes"]       = eop["notes"]
+        res["relay_results"]   = check_open_relay(dom)
         # Clear progress line before printing result
         print(f"{' ' * W}", end="\r")
         print_domain_result(res, n, total)
