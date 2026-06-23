@@ -161,7 +161,21 @@ def check_spoofability(domain):
 
     return result
 
+_REPUTATION_KEYWORDS = [
+    "spamhaus", "barracuda", "sorbs", "spamcop", "spamrats",
+    "blocked using", "blocked by", "listed in", "dnsbl", "rbl",
+    "spam database", "blacklist", "blocklist",
+]
+
+def _is_reputation_block(msg):
+    m = msg.lower()
+    return any(kw in m for kw in _REPUTATION_KEYWORDS)
+
 def check_eop_direct_send(domain):
+    # direct_send_open values:
+    #   False     = probed, rejected at connector/relay level — actually closed
+    #   "likely"  = MAIL FROM accepted; RCPT TO blocked by IP reputation (clean IP would succeed)
+    #   True      = MAIL FROM + RCPT TO both accepted — immediately exploitable
     eop_host = get_eop_hostname(domain)
     result = {"eop_host": eop_host, "eop_ip": None, "resolves": False,
               "direct_send_open": False, "notes": ""}
@@ -182,23 +196,30 @@ def check_eop_direct_send(domain):
     result["eop_ip"] = eop_ip
 
     try:
-        with smtplib.SMTP(timeout=10) as server:
+        with smtplib.SMTP(timeout=15) as server:
             server.connect(eop_ip, 25)
             server.ehlo_or_helo_if_needed()
             code, msg = server.mail(f"probe@{domain}")
+            m = msg.decode() if isinstance(msg, bytes) else str(msg)
             if code == 250:
                 code2, msg2 = server.rcpt(f"probe@{domain}")
-                server.rset()
-                server.quit()
-                m = msg2.decode() if isinstance(msg2, bytes) else str(msg2)
+                m2 = msg2.decode() if isinstance(msg2, bytes) else str(msg2)
+                # Evaluate result BEFORE cleanup so rset/quit errors can't mask it
                 if code2 == 250:
                     result["direct_send_open"] = True
                     result["notes"] = "MAIL FROM + RCPT TO accepted"
+                elif _is_reputation_block(m2):
+                    result["direct_send_open"] = "likely"
+                    result["notes"] = "MAIL FROM accepted; RCPT TO blocked by IP reputation — test from clean IP"
                 else:
-                    result["notes"] = f"RCPT TO rejected: {m}"
+                    result["notes"] = f"RCPT TO {code2}: {m2.strip()[:80]}"
+                try:
+                    server.rset()
+                    server.quit()
+                except Exception:
+                    pass
             else:
-                m = msg.decode() if isinstance(msg, bytes) else str(msg)
-                result["notes"] = f"MAIL FROM rejected: {m}"
+                result["notes"] = f"MAIL FROM {code}: {m.strip()[:80]}"
     except smtplib.SMTPConnectError as e:
         result["notes"] = f"Connection refused: {e}"
     except Exception as e:
@@ -315,7 +336,10 @@ def create_forced_auth_email(template, responder_ip):
 
 # ── Display ─────────────────────────────────────────────────────────────────
 def risk_label(res):
-    if res.get("eop_direct_send"):
+    eop = res.get("eop_direct_send")
+    if eop is True:
+        return "CRITICAL", RED
+    if eop == "likely":
         return "CRITICAL", RED
     if res["spoofable"]:
         return ("MEDIUM", YELLOW) if "quarantine" in res["policy"].lower() else ("HIGH", RED)
@@ -351,11 +375,20 @@ def print_domain_result(res, n=None, total=None):
     elif eop is True:
         print(f"  {'EOP':<8}  {eop_host}")
         print(f"  {'':10}{eop_ip}  {RED}{BOLD}→ DIRECT SEND OPEN{RESET}")
+    elif eop == "likely":
+        print(f"  {'EOP':<8}  {eop_host}")
+        print(f"  {'':10}{eop_ip}  {YELLOW}{BOLD}→ OPEN (IP reputation block — test from clean IP){RESET}")
+        if notes:
+            short = notes[:70] + ".." if len(notes) > 72 else notes
+            print(f"  {'':10}{DIM}{short}{RESET}")
     elif eop_ip:
         print(f"  {'EOP':<8}  {eop_host}")
         print(f"  {'':10}{eop_ip}  {GREEN}→ Closed{RESET}")
+        if notes:
+            short = notes[:70] + ".." if len(notes) > 72 else notes
+            print(f"  {'':10}{DIM}{short}{RESET}")
     elif notes:
-        short = notes[:55] + ".." if len(notes) > 57 else notes
+        short = notes[:70] + ".." if len(notes) > 72 else notes
         print(f"  {'EOP':<8}  {DIM}{short}{RESET}")
 
     # MX open relay rows
@@ -385,9 +418,11 @@ def print_summary_table(results):
         policy = r["policy"]
         label, color = risk_label(r)
         eop = r.get("eop_direct_send")
-        eop_str   = f"{RED}{BOLD}OPEN{RESET}"   if eop is True  else (
-                    f"{GREEN}Closed{RESET}"      if eop is False else "─")
-        eop_label = "OPEN" if eop is True else ("Closed" if eop is False else "─")
+        eop_str   = (f"{RED}{BOLD}OPEN{RESET}"     if eop is True    else
+                     f"{YELLOW}LIKELY{RESET}"    if eop == "likely" else
+                     f"{GREEN}Closed{RESET}"     if eop is False    else "─")
+        eop_label = ("OPEN" if eop is True else "LIKELY" if eop == "likely"
+                     else "Closed" if eop is False else "─")
 
         relay_hits = [m for m in r.get("relay_results", []) if m["open_relay"]]
         total_mx   = len(r.get("relay_results", []))
@@ -416,6 +451,10 @@ def print_critical_findings(results):
         if r.get("eop_direct_send") is True:
             items.append((RED, "EOP DIRECT SEND OPEN", r["domain"],
                 f"Bypasses mail gateway via {r['eop_host']}"))
+        elif r.get("eop_direct_send") == "likely":
+            items.append((YELLOW, "EOP DIRECT SEND — LIKELY OPEN", r["domain"],
+                f"MAIL FROM accepted; RCPT TO blocked by IP reputation only\n"
+                f"     Verify from a clean sending IP — {r['eop_host']}"))
         if r["spoofable"] and "quarantine" not in r["policy"].lower():
             items.append((RED, "SPOOFABLE DOMAIN", r["domain"],
                 f"DMARC: {r['policy']}"))
@@ -460,7 +499,9 @@ def export_results_csv(results, filename):
                     label,
                     "Yes" if r.get("o365") else "No",
                     r.get("eop_host", ""),
-                    "Open" if eop_d is True else ("Closed" if eop_d is False else "N/A"),
+                    ("Open" if eop_d is True else
+                     "Likely Open (IP reputation block)" if eop_d == "likely" else
+                     "Closed" if eop_d is False else "N/A"),
                     r.get("eop_notes", ""),
                     r.get("onmicrosoft_domain", ""),
                     f"{len(open_relays)}/{len(relay)}" if relay else "N/A",
@@ -502,17 +543,18 @@ def prompt_compose(results=None):
     print(f"\n  {BOLD}COMPOSE EMAIL{RESET}")
     print(f"  {'─' * 50}")
 
-    eop_candidates = [(r["domain"], r["eop_host"], r["eop_ip"])
+    eop_candidates = [(r["domain"], r["eop_host"], r["eop_ip"], r.get("eop_direct_send"))
                       for r in (results or [])
-                      if r.get("eop_direct_send") is True and r.get("eop_ip")]
+                      if r.get("eop_direct_send") in (True, "likely") and r.get("eop_ip")]
 
     smtp_ip   = None
     route_label = ""
 
     if eop_candidates:
         print(f"\n  EOP direct-send endpoints available:\n")
-        for i, (dom, host, ip) in enumerate(eop_candidates, 1):
-            print(f"    [{i}] {host}")
+        for i, (dom, host, ip, state) in enumerate(eop_candidates, 1):
+            flag = f"  {YELLOW}(test from clean IP){RESET}" if state == "likely" else ""
+            print(f"    [{i}] {host}{flag}")
             print(f"        {DIM}{ip}  ←  {dom}{RESET}")
         print(f"    [{len(eop_candidates) + 1}] Enter target domain (primary MX)")
         print()
@@ -520,7 +562,7 @@ def prompt_compose(results=None):
             pick = input("  Route via: ").strip()
             idx  = int(pick) - 1
             if 0 <= idx < len(eop_candidates):
-                dom, host, ip = eop_candidates[idx]
+                dom, host, ip, state = eop_candidates[idx]
                 smtp_ip     = ip
                 route_label = f"EOP — {host}"
         except (ValueError, IndexError):
@@ -616,7 +658,7 @@ def prompt_forced():
 
 # ── Post-scan menu ──────────────────────────────────────────────────────────
 def post_scan_menu(results):
-    eop_hits = [r for r in results if r.get("eop_direct_send") is True]
+    eop_hits = [r for r in results if r.get("eop_direct_send") in (True, "likely")]
     while True:
         print(f"\n  {'─' * 40}")
         print(f"   [1]  Send test email", end="")
