@@ -1,43 +1,46 @@
 # Spoofit Roadmap
 
-## Current State (v1.2)
+## Current State (v1.3)
 
 ### Checks
 - DMARC policy evaluation (`p=reject`, `p=quarantine`, `p=none`, missing)
 - Subdomain policy inheritance (`sp=` tag logic)
 - MX record existence check (no MX = not a mail-receiving domain)
-- **O365/Exchange Online detection** (MX + SPF indicators)
-- **EOP direct-send probe** (`domain-com.mail.protection.outlook.com`) — always runs, detects gateway bypass even when Proofpoint/Mimecast is primary MX
-- **OnMicrosoft.com discovery via azmap.dev** — `tenant_name` from azmap.dev API
-- **Full tenant domain expansion via azmap.dev** — `related_domains` gives all tenant domains; auto-scanned when passing a single domain to `-t`
+- O365/Exchange Online detection (MX + SPF indicators)
+- **EOP direct-send probe** — always runs regardless of O365 detection; three result states: Open / Likely Open (IP reputation block only) / Closed
+- **IP reputation awareness** — distinguishes Spamhaus/Barracuda/SORBS RCPT TO rejections from actual connector-level blocks; MAIL FROM acceptance is the true indicator of vulnerability
+- **Open relay check across all MX records** — probes every MX priority level with external-to-external envelope; backup MX servers often less hardened than primary
+- **OnMicrosoft.com discovery via azmap.dev** — `tenant_name` from API response
+- **Full tenant domain expansion via azmap.dev** — `related_domains` gives all tenant domains; auto-scanned when passing a single domain
 
 ### Send Capabilities
 - Direct-to-MX spoofed email delivery
 - Forced authentication email (SMB/responder capture via `file://` UNC path)
 - Bulk send from recipient file
 - RFC 5322 headers (`Date`, `Message-ID`, `MIME-Version`) to reduce spam scoring
-- **Interactive compose from terminal** — post-scan menu presents discovered EOP endpoints as routing options
+- Interactive compose from terminal — post-scan menu offers discovered EOP endpoints as routing options
 
 ### UI
-- **Interactive menu** (no-args launch): domain check, send, forced auth
-- **Post-scan menu**: send test email, export CSV, new scan
+- Interactive menu (no-args launch): domain check, send, forced auth
+- Post-scan menu: send test email, export CSV, new scan
 - Per-domain results with risk label (CRITICAL / HIGH / MEDIUM / PROTECTED / N/A)
-- Summary table with correct ANSI-aware column alignment
-- Critical findings callout block
-- CSV export with full findings
+- Notes shown for all EOP outcomes (open, likely, closed) for operator context
+- Summary table with ANSI-aware column alignment — DMARC, RISK, EOP, RELAY columns
+- Critical findings callout block with severity distinction
+- CSV export with full findings including relay detail
 
 ---
 
 ## Planned
 
-### v1.2 — Extended Protocol Analysis
+### v1.4 — Extended Protocol Analysis
 - [ ] **SPF deep analysis**: detect `+all` (open relay), missing SPF, `~all` vs `-all` distinction, `?all`
-- [ ] **DKIM record check**: confirm DKIM selectors exist (`selector1/selector2._domainkey`), flag missing DKIM as a finding
+- [ ] **DKIM record check**: confirm DKIM selectors exist (`selector1/selector2._domainkey`), flag missing DKIM
 - [ ] **MTA-STS policy check**: detect domains enforcing MTA-STS (RFC 8461) which prevents STARTTLS stripping
-- [ ] **BIMI record check**: presence/absence of `default._bimi` (informational, indicates brand protection investment)
-- [ ] **Multi-MX probe**: test all MX priority levels, not just lowest — backup MX servers are often less hardened
+- [ ] **BIMI record check**: presence/absence of `default._bimi` (informational)
+- [ ] **Email gateway fingerprinting**: detect Proofpoint, Mimecast, Barracuda, Cisco IronPort by MX hostname pattern, banner, or headers
 
-### v1.3 — Enhanced Send Capabilities
+### v1.5 — Enhanced Send Capabilities
 - [ ] **MIME multipart support**: send both `text/plain` and `text/html` parts — missing plaintext part is a spam signal
 - [ ] **Reply-To header manipulation**: route replies to attacker-controlled address
 - [ ] **Display name spoofing**: `"CEO Name" <attacker@external.com>` format testing
@@ -45,30 +48,24 @@
 - [ ] **Attachment support**: send with file attachment for credential harvest or macro delivery
 - [ ] **STARTTLS support**: some servers reject unencrypted SMTP connections
 
-### v1.4 — Tenant & Infrastructure Enumeration
-- [x] **onmicrosoft.com discovery via azmap.dev**: `GET /api/tenant?domain=X` returns `tenant_name` directly; replaces broken Microsoft API methods
-- [x] **Full tenant domain sweep via azmap.dev**: `related_domains` lists every domain in the tenant — passing one domain to `-t` or the interactive menu auto-discovers and checks all
-- [ ] **Generic SMTP relay test**: beyond EOP — test any discovered SMTP server for open relay (`RCPT TO:<external>` from external sender)
-- [ ] **Email gateway fingerprinting**: detect Proofpoint, Mimecast, Barracuda, Cisco IronPort by MX hostname pattern, banner, or headers
-
-### v1.5 — Output & Integration
+### v1.6 — Output & Integration
 - [ ] **JSON output format**: machine-readable output for integration with reporting pipelines
 - [ ] **Verbose mode** (`-v`): show raw DNS records, SMTP banners, full DMARC record strings
-- [ ] **Rate limiting** (`--delay N`): configurable delay between sends to reduce detection likelihood
+- [ ] **Rate limiting** (`--delay N`): configurable delay between domain checks
 - [ ] **Markdown/HTML report**: single-file report suitable for pasting into pentest reports
 
 ### Long-term / Research
-- [ ] **DMARC alignment bypass techniques**: test edge cases — `From:` header with multiple addresses, internationalized domain names (IDN homographs), whitespace tricks
-- [ ] **SPF `+all` exploit path**: if target has `+all` or is reachable from a permitted IP range, demonstrate relay from that range
-- [ ] **Internal relay via onmicrosoft.com**: if tenant relay is misconfigured, test whether mail sent to `tenant.onmicrosoft.com` SMTP accepts spoofed From headers that appear internal, bypassing DMARC alignment for the tenant's primary domain
-- [ ] **ARC (Authenticated Received Chain) analysis**: determine whether intermediate forwarders break DMARC and whether ARC sealing is present
-- [ ] **Catch-all address detection**: identify if target domain accepts mail for any recipient (useful for payload delivery and enumeration)
+- [ ] **DMARC alignment bypass techniques**: `From:` header edge cases, IDN homographs, whitespace tricks
+- [ ] **SPF `+all` exploit path**: demonstrate relay from a permitted IP range
+- [ ] **Internal relay via onmicrosoft.com**: test whether misconfigured tenant relay allows spoofed From headers that appear internal
+- [ ] **ARC (Authenticated Received Chain) analysis**: determine whether forwarders break DMARC and whether ARC sealing is present
+- [ ] **Catch-all address detection**: identify if target domain accepts mail for any recipient
 
 ---
 
 ## Known Issues / Limitations
 
-- **OnMicrosoft.com auto-discovery is unreliable**: the tenant name doesn't always match the primary domain label. Use [aadinternals.com](https://aadinternals.com) or [osint.aadinternals.com](https://osint.aadinternals.com) for manual enumeration.
-- **Unauthenticated tenant domain enumeration is largely broken**: Microsoft disabled the public APIs. See README for current workarounds.
-- **EOP probe requires outbound port 25**: many ISPs and cloud providers block outbound port 25. Run from a VPS or pentest infrastructure that has port 25 open.
+- **EOP probe requires outbound port 25**: many ISPs and cloud providers block outbound port 25. Run from a VPS or pentest infrastructure.
+- **EOP likely-open vs confirmed-open**: when a sending IP is on a reputation blocklist, RCPT TO is rejected before delivery is attempted. The MAIL FROM 250 response confirms no connector-level restriction exists — verify with a live send from a clean IP.
 - **EOP may silently accept then blackhole**: some EOP configurations accept the SMTP transaction (250 OK) but silently discard or quarantine without delivery. A successful probe does not guarantee inbox delivery — confirm with a live send during the engagement.
+- **azmap.dev coverage**: not all Microsoft tenants are indexed. Domains not found fall back to single-domain scan.
