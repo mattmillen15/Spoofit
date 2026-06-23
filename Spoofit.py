@@ -582,26 +582,30 @@ Examples:
             print_domain_header(dom)
             res = check_spoofability(dom)
 
-            if detect_o365(dom):
-                res["o365"] = True
+            # Always probe the EOP endpoint — detection shouldn't be gated on O365
+            # indicators since that logic can miss domains using third-party gateways.
+            # The probe reports its own result; we only flag O365 separately for context.
+            o365 = detect_o365(dom)
+            res["o365"] = o365
+
+            primary_mx = get_primary_mx_hostname(dom)
+            if o365:
                 print(f"\n[*] Exchange Online detected")
-
-                primary_mx = get_primary_mx_hostname(dom)
                 if primary_mx and 'mail.protection.outlook.com' not in primary_mx:
-                    print(f"    Primary MX : {primary_mx}")
-                    print(f"    Checking EOP endpoint for gateway bypass...")
+                    print(f"    Primary MX : {primary_mx} (third-party gateway)")
 
-                eop_result = check_eop_direct_send(dom)
-                res["eop_host"]        = eop_result["eop_host"]
-                res["eop_ip"]          = eop_result["eop_ip"]
-                res["eop_direct_send"] = eop_result["direct_send_open"]
-                res["eop_notes"]       = eop_result["notes"]
+            eop_result = check_eop_direct_send(dom)
+            res["eop_host"]        = eop_result["eop_host"]
+            res["eop_ip"]          = eop_result["eop_ip"]
+            res["eop_direct_send"] = eop_result["direct_send_open"]
+            res["eop_notes"]       = eop_result["notes"]
 
-                if eop_result["direct_send_open"] and eop_result["eop_ip"]:
-                    choice = input(f"\n  Send a test email via EOP now? [y/N]: ").strip().lower()
-                    if choice == "y":
-                        prompt_eop_send(eop_result["eop_host"], eop_result["eop_ip"], dom)
+            if eop_result["direct_send_open"] and eop_result["eop_ip"]:
+                choice = input(f"\n  Send a test email via EOP now? [y/N]: ").strip().lower()
+                if choice == "y":
+                    prompt_eop_send(eop_result["eop_host"], eop_result["eop_ip"], dom)
 
+            if o365:
                 print(f"\n[*] Looking up .onmicrosoft.com domain...")
                 onmicrosoft = get_onmicrosoft_domain(dom)
                 if onmicrosoft:
