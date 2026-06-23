@@ -1,25 +1,30 @@
 # Spoofit Roadmap
 
-## Current State (v1.1)
+## Current State (v1.2)
 
 ### Checks
 - DMARC policy evaluation (`p=reject`, `p=quarantine`, `p=none`, missing)
 - Subdomain policy inheritance (`sp=` tag logic)
 - MX record existence check (no MX = not a mail-receiving domain)
 - **O365/Exchange Online detection** (MX + SPF indicators)
-- **EOP direct-send probe** (`domain-com.mail.protection.outlook.com`) — detects gateway bypass even when Proofpoint/Mimecast is primary MX
-- **OnMicrosoft.com domain discovery** — DNS guess + OpenID Connect endpoint; checks DMARC for the tenant's `.onmicrosoft.com` domain
+- **EOP direct-send probe** (`domain-com.mail.protection.outlook.com`) — always runs, detects gateway bypass even when Proofpoint/Mimecast is primary MX
+- **OnMicrosoft.com discovery via azmap.dev** — `tenant_name` from azmap.dev API
+- **Full tenant domain expansion via azmap.dev** — `related_domains` gives all tenant domains; auto-scanned when passing a single domain to `-t`
 
 ### Send Capabilities
 - Direct-to-MX spoofed email delivery
 - Forced authentication email (SMB/responder capture via `file://` UNC path)
 - Bulk send from recipient file
-- **Proper RFC 5322 headers** (`Date`, `Message-ID`, `MIME-Version`) to reduce spam scoring from missing-header signals
+- RFC 5322 headers (`Date`, `Message-ID`, `MIME-Version`) to reduce spam scoring
+- **Interactive compose from terminal** — post-scan menu presents discovered EOP endpoints as routing options
 
-### Output
-- Per-domain color-coded terminal output
-- Summary table with O365 / EOP Direct Send columns
-- CSV export with all findings
+### UI
+- **Interactive menu** (no-args launch): domain check, send, forced auth
+- **Post-scan menu**: send test email, export CSV, new scan
+- Per-domain results with risk label (CRITICAL / HIGH / MEDIUM / PROTECTED / N/A)
+- Summary table with correct ANSI-aware column alignment
+- Critical findings callout block
+- CSV export with full findings
 
 ---
 
@@ -42,7 +47,7 @@
 
 ### v1.4 — Tenant & Infrastructure Enumeration
 - [x] **onmicrosoft.com discovery via azmap.dev**: `GET /api/tenant?domain=X` returns `tenant_name` directly; replaces broken Microsoft API methods
-- [ ] **Full tenant domain sweep via azmap.dev**: `related_domains` in the azmap.dev response lists every domain in the tenant — wire this into `-t` so passing one domain auto-discovers and checks all tenant domains
+- [x] **Full tenant domain sweep via azmap.dev**: `related_domains` lists every domain in the tenant — passing one domain to `-t` or the interactive menu auto-discovers and checks all
 - [ ] **Generic SMTP relay test**: beyond EOP — test any discovered SMTP server for open relay (`RCPT TO:<external>` from external sender)
 - [ ] **Email gateway fingerprinting**: detect Proofpoint, Mimecast, Barracuda, Cisco IronPort by MX hostname pattern, banner, or headers
 

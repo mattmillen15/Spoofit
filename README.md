@@ -1,90 +1,104 @@
 # Spoofit
-Spoofit is designed to send spoofed emails for security testing. The tool takes advantage of situations where a domain's DMARC policy is not set to "reject," allowing spoofed emails to be sent using Microsoft's "direct send" with a higher likelihood of bypassing spam filters and reaching the target's inbox.
 
-## Update 10/3/2025
-Unauthenticated enumeration of Microsoft tenants is essentially broken -- breaking the portion of this tool that would enumerate domains in a target tenant. The tool has been modified to take a list of domains with the `-t` flag. To obtain a list of domains in the target tenant, use one of the following:
-- https://micahvandeusen.com/tools/tenant-domains/
-- https://osint.aadinternals.com/
-___
+Spoofit is an email spoofability assessment tool for authorized penetration testing. It identifies DMARC misconfigurations, probes Microsoft Exchange Online's EOP direct-send endpoint for gateway bypass, enumerates full tenant domain scope via [azmap.dev](https://azmap.dev), and lets you compose and deliver test emails directly from the terminal.
+
+---
 
 ## Usage
 
 ```
 python3 Spoofit.py
+```
 
-   _____                   _____ __
-  / ___/____  ____  ____  / __(_) /_
-  \__ \/ __ \/ __ \/ __ \/ /_/ / __/
- ___/ / /_/ / /_/ / /_/ / __/ / /_
-/____/ .___/\____/\____/_/ /_/\__/
-    /_/
+No arguments launches the interactive menu. CLI flags are available for scripted use.
 
-usage: Spoofit.py [-h] [-t TARGET] [-o OUTPUT] [-s SENDER] [-r RECIPIENTS] [-f RESPONDER_IP]
+```
+usage: Spoofit.py [-h] [-t TARGET] [-o OUTPUT] [-s SENDER] [-r RECIPIENTS] [-f RESPONDER_IP] [--no-expand]
 
 options:
-  -h, --help            show this help message and exit
-  -t, --target TARGET   Target domain or file containing list of domains to check.
-  -o, --output OUTPUT   Output CSV filename (optional, auto-generated if not specified).
-  -s, --sender SENDER   Spoofed sender email.
-  -r, --recipients RECIPIENTS
-                        Recipient email or file containing list of recipient emails.
-  -f, --forced RESPONDER_IP
-                        Forced authentication with responder-ip.
+  -h, --help              show this help message and exit
+  -t, --target TARGET     Domain or file of domains to check.
+  -o, --output OUTPUT     Output CSV filename.
+  -s, --sender SENDER     Spoofed sender email.
+  -r, --recipients RECIP  Recipient email or file.
+  -f, --forced RESP_IP    Forced auth — responder IP.
+  --no-expand             Do not auto-expand to all tenant domains via azmap.dev.
 
 Examples:
-
-  1) Check single domain:
-     Spoofit.py -t domain.com
-
-  2) Check multiple domains from file:
-     Spoofit.py -t domains.txt -o results.csv
-
-  3) Send a spoofed email (single recipient):
-     Spoofit.py -s sender@domain.com -r recipient@domain.com
-
-  4) Send a spoofed email (multiple recipients from file):
-     Spoofit.py -s sender@domain.com -r recipients.txt
-
-  5) Forced authentication:
-     Spoofit.py -s sender@domain.com -r recipient@domain.com -f responder-ip
+  Spoofit.py                                          # interactive menu
+  Spoofit.py -t domain.com                            # check domain + all tenant domains
+  Spoofit.py -t domain.com --no-expand                # check that domain only
+  Spoofit.py -t domains.txt                           # check domains from file
+  Spoofit.py -s from@domain.com -r to@domain.com      # send spoofed email
+  Spoofit.py -s from@domain.com -r to@domain.com -f 10.0.0.1   # forced auth
 ```
-___
+
+---
 
 ## What It Checks
 
-When running `-t`, Spoofit evaluates each domain for:
+When running a domain check, Spoofit:
 
-- **DMARC policy** — `p=reject` (protected), `p=quarantine` (partial), `p=none` / missing (spoofable)
-- **Subdomain policy** — checks `sp=` tag on the org domain when a subdomain has no direct DMARC record
-- **MX record existence** — domains with no MX cannot receive mail and are skipped
-- **O365/Exchange Online detection** — identified via MX record or SPF `include:spf.protection.outlook.com`
-- **EOP direct-send probe** — when O365 is detected, Spoofit checks `domain-com.mail.protection.outlook.com` directly to see if mail can be delivered to that endpoint, bypassing a third-party gateway (Proofpoint, Mimecast, etc.) that may be the primary MX
-- **OnMicrosoft.com DMARC** — attempts to discover and check the tenant's `.onmicrosoft.com` domain for spoofability
+- **DMARC** — evaluates `p=reject`, `p=quarantine`, `p=none`, missing, subdomain `sp=` inheritance
+- **MX existence** — skips domains with no MX record
+- **O365 detection** — detected via MX record or SPF `include:spf.protection.outlook.com`
+- **EOP direct-send probe** — checks `domain-com.mail.protection.outlook.com` with SMTP handshake (EHLO + MAIL FROM + RCPT TO, no DATA) to detect gateway bypass
+- **Tenant domain expansion** — queries azmap.dev for the full list of domains in the tenant, auto-scans all of them
+
+### Tenant Expansion
+
+Passing a single domain to `-t` or via the interactive menu will look up the Microsoft tenant via azmap.dev and offer to scan all associated domains. This gives complete coverage without manually enumerating tenant domains.
+
+To skip expansion: `--no-expand`, or use a domains file with `-t domains.txt`.
 
 ### EOP Direct Send
 
-Even if an organization routes inbound mail through Proofpoint or Mimecast, the underlying Exchange Online endpoint (`domain-com.mail.protection.outlook.com`) may still accept direct connections from the internet. If it does, the gateway is effectively bypassed. Spoofit probes this with a standard SMTP handshake (EHLO + MAIL FROM + RCPT TO) without sending DATA.
+Even when an organization routes inbound mail through Proofpoint or Mimecast, the Exchange Online endpoint (`domain-com.mail.protection.outlook.com`) may accept direct connections. If it does, the gateway is bypassed entirely. Spoofit probes this with a non-DATA SMTP handshake.
 
-> Note: The probe requires outbound port 25. Run from a VPS or pentest infrastructure, not a standard ISP connection. EOP may also accept the transaction but silently quarantine — confirm with a live send during the engagement.
+> Requires outbound port 25. Run from a VPS or pentest infrastructure, not a standard ISP connection. EOP may accept the transaction and silently quarantine — confirm with a live send during the engagement.
 
-___
+---
+
+## Interactive Menu
+
+Launching with no arguments enters the interactive menu:
+
+```
+  [1]  Check domain / tenant
+  [2]  Send spoofed email
+  [3]  Forced authentication
+  [q]  Quit
+```
+
+After a scan, a post-scan menu offers:
+
+```
+  [1]  Send test email     (lists discovered EOP endpoints as routing options)
+  [2]  Export results to CSV
+  [3]  New scan
+  [m]  Main menu
+```
+
+---
 
 ## Configuration
-Edit `conf/spoofit.conf` to customize the subject and body of emails. The forced authentication email template is in `conf/forced_auth_template.html`.
 
-___
+Edit `conf/spoofit.conf` for default email subjects and body text. The forced authentication template is at `conf/forced_auth_template.html`.
+
+---
 
 ## Output
 
-Results are printed to the terminal with color coding and written to a CSV. The CSV includes:
+Results are printed to the terminal with risk-based color coding and written to CSV.
 
 | Column | Description |
 |---|---|
 | Domain | Target domain |
 | DMARC Policy | Raw policy finding |
-| Spoofing Possible | Yes / No / Maybe / Doubtful |
-| O365 Detected | Whether Exchange Online was identified |
+| Spoofable | Yes / No |
+| Risk | CRITICAL / HIGH / MEDIUM / PROTECTED / N/A |
+| O365 | Whether Exchange Online was identified |
 | EOP Host | The EOP direct-send hostname checked |
 | EOP Direct Send | Open / Closed / N/A |
 | EOP Notes | SMTP response detail |
-| OnMicrosoft Domain | Discovered `.onmicrosoft.com` domain, if any |
+| OnMicrosoft Domain | Tenant `.onmicrosoft.com` domain |
