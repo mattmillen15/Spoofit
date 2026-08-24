@@ -903,14 +903,10 @@ def main():
         sender_domain = args.sender.split("@")[1]
         smtp_ip = None
         route = ""
+        eop_host = get_eop_hostname(sender_domain)
         try:
-            mx_answers = dns.resolver.resolve(sender_domain, "MX")
-            for rdata in mx_answers:
-                mx_host = rdata.exchange.to_text().lower().rstrip(".")
-                if "mail.protection.outlook.com" in mx_host:
-                    smtp_ip = dns.resolver.resolve(mx_host, "A")[0].to_text()
-                    route = f"EOP → {mx_host}"
-                    break
+            smtp_ip = dns.resolver.resolve(eop_host, "A")[0].to_text()
+            route = f"EOP → {eop_host}"
         except Exception:
             pass
 
