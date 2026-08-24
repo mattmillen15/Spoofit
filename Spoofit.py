@@ -303,7 +303,7 @@ def send_email(smtp_host, sender, recipient, subject, body):
             f"MIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n{body}"
         )
         with smtplib.SMTP(smtp_host, 25) as server:
-            server.ehlo_or_helo_if_needed()
+            server.ehlo(sender_domain)
             server.mail(sender)
             code, msg = server.rcpt(recipient)
             if code != 250:
