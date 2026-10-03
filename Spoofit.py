@@ -56,7 +56,19 @@ def get_tenant_info(domain):
     return None
 
 def get_eop_hostname(domain):
+    if domain.lower().endswith(".onmicrosoft.com"):
+        return domain.split(".")[0] + ".mail.protection.outlook.com"
     return domain.replace(".", "-") + ".mail.protection.outlook.com"
+
+def get_eop_from_mx(domain):
+    try:
+        for rdata in dns.resolver.resolve(domain, "MX"):
+            mx_host = rdata.exchange.to_text().rstrip(".")
+            if "mail.protection.outlook.com" in mx_host.lower():
+                return mx_host
+    except Exception:
+        pass
+    return None
 
 def detect_o365(domain):
     try:
@@ -95,6 +107,15 @@ def is_subdomain(domain):
     return domain.lower() != f"{ext.domain}.{ext.suffix}".lower()
 
 # ── Checks (no output — return data only) ──────────────────────────────────
+def _parse_dmarc_tags(record):
+    tags = {}
+    for part in record.replace('"', '').split(';'):
+        part = part.strip()
+        if '=' in part:
+            k, v = part.split('=', 1)
+            tags[k.strip().lower()] = v.strip().lower()
+    return tags
+
 def check_spoofability(domain):
     result = {
         "domain": domain, "policy": "", "spoofable": False,
@@ -115,12 +136,14 @@ def check_spoofability(domain):
         record = None
 
     if record:
-        if "p=reject" in record:
+        tags = _parse_dmarc_tags(record)
+        p = tags.get('p', '')
+        if p == 'reject':
             result["policy"] = "p=reject"
-        elif "p=quarantine" in record:
+        elif p == 'quarantine':
             result["policy"] = "p=quarantine"
             result["spoofable"] = True
-        elif "p=none" in record:
+        elif p == 'none':
             result["policy"] = "p=none"
             result["spoofable"] = True
         else:
@@ -140,17 +163,24 @@ def check_spoofability(domain):
                 org_rec = None
 
             if org_rec:
-                sp = next((t.split("=",1)[1] for t in org_rec.split() if t.startswith("sp=")), "")
-                if sp == "reject":
+                org_tags = _parse_dmarc_tags(org_rec)
+                sp = org_tags.get('sp', '')
+                p = org_tags.get('p', '')
+                if sp == 'reject':
                     result["policy"] = "No DMARC (org sp=reject)"
-                elif sp == "quarantine":
+                elif sp == 'quarantine':
                     result["policy"] = "No DMARC (org sp=quarantine)"
                     result["spoofable"] = True
-                elif "p=reject" in org_rec:
-                    result["policy"] = "No DMARC (org p=reject, no sp=)"
+                elif sp == 'none':
+                    result["policy"] = "No DMARC (org sp=none)"
                     result["spoofable"] = True
-                elif "p=quarantine" in org_rec:
-                    result["policy"] = "No DMARC (org p=quarantine, no sp=)"
+                elif p == 'reject':
+                    result["policy"] = "No DMARC (inherits org p=reject)"
+                elif p == 'quarantine':
+                    result["policy"] = "No DMARC (inherits org p=quarantine)"
+                    result["spoofable"] = True
+                elif p == 'none':
+                    result["policy"] = "No DMARC (org p=none)"
                     result["spoofable"] = True
                 else:
                     result["policy"] = "No DMARC"
@@ -185,23 +215,25 @@ def check_eop_direct_send(domain, onmicrosoft=None):
         eop_ip = dns.resolver.resolve(eop_host, "A")[0].to_text()
         result["resolves"] = True
     except Exception:
-        try:
-            mx_host = min(dns.resolver.resolve(eop_host, "MX"),
-                         key=lambda r: r.preference).exchange.to_text().rstrip(".")
-            eop_ip = dns.resolver.resolve(mx_host, "A")[0].to_text()
-            result["resolves"] = True
-        except Exception:
-            if onmicrosoft:
-                alt_host = onmicrosoft.split(".")[0] + ".mail.protection.outlook.com"
-                if alt_host != eop_host:
-                    try:
-                        eop_ip = dns.resolver.resolve(alt_host, "A")[0].to_text()
-                        result["resolves"] = True
-                        result["eop_host"] = alt_host
-                    except Exception:
-                        pass
-            if not eop_ip:
-                return result
+        real_mx = get_eop_from_mx(domain)
+        if real_mx and real_mx.rstrip(".").lower() != eop_host.lower():
+            try:
+                eop_ip = dns.resolver.resolve(real_mx, "A")[0].to_text()
+                result["resolves"] = True
+                result["eop_host"] = real_mx.rstrip(".")
+            except Exception:
+                pass
+        if not eop_ip and onmicrosoft:
+            alt_host = onmicrosoft.split(".")[0] + ".mail.protection.outlook.com"
+            if alt_host != eop_host:
+                try:
+                    eop_ip = dns.resolver.resolve(alt_host, "A")[0].to_text()
+                    result["resolves"] = True
+                    result["eop_host"] = alt_host
+                except Exception:
+                    pass
+        if not eop_ip:
+            return result
 
     result["eop_ip"] = eop_ip
 
@@ -351,6 +383,8 @@ def risk_label(res):
         return "CRITICAL", RED
     if eop == "likely":
         return "CRITICAL", RED
+    if any(m["open_relay"] for m in res.get("relay_results", [])):
+        return "CRITICAL", RED
     if res["spoofable"]:
         return ("MEDIUM", YELLOW) if "quarantine" in res["policy"].lower() else ("HIGH", RED)
     if res["policy"] == "No MX record":
@@ -363,14 +397,12 @@ def print_domain_result(res, n=None, total=None):
     label, color = risk_label(res)
     ctr     = f"[{n}/{total}] " if n is not None else ""
 
-    print(f"\n  {BOLD}{ctr}{domain}{RESET}")
+    print(f"\n  {BOLD}{ctr}{domain}{RESET}  {color}[{label}]{RESET}")
     print(f"  {'─' * (W - 2)}")
 
     # DMARC row
-    p = (policy[:36] + "..") if len(policy) > 38 else policy
-    risk_str = f"[{label}]"
-    pad = max(0, W - 2 - 10 - len(p) - len(risk_str))
-    print(f"  {'DMARC':<8}  {p}{' ' * pad}{color}{risk_str}{RESET}")
+    p = (policy[:60] + "..") if len(policy) > 62 else policy
+    print(f"  {'DMARC':<8}  {p}")
 
     # EOP row
     eop_host = res.get("eop_host", "")
@@ -430,9 +462,9 @@ def print_summary_table(results):
         eop = r.get("eop_direct_send")
         eop_str   = (f"{RED}{BOLD}OPEN{RESET}"     if eop is True    else
                      f"{YELLOW}LIKELY{RESET}"    if eop == "likely" else
-                     f"{GREEN}Closed{RESET}"     if eop is False    else "─")
+                     f"{GREEN}Closed{RESET}"     if r.get("resolves") and eop is False else "─")
         eop_label = ("OPEN" if eop is True else "LIKELY" if eop == "likely"
-                     else "Closed" if eop is False else "─")
+                     else "Closed" if r.get("resolves") and eop is False else "─")
 
         relay_hits = [m for m in r.get("relay_results", []) if m["open_relay"]]
         total_mx   = len(r.get("relay_results", []))
@@ -531,7 +563,7 @@ def run_scan(domains, onmicrosoft=""):
         print(f"  {DIM}checking ({n}/{total}) {dom}...{RESET}", end="\r", flush=True)
         res           = check_spoofability(dom)
         res["o365"]   = detect_o365(dom)
-        eop           = check_eop_direct_send(dom, onmicrosoft=onmicrosoft or None)
+        eop           = check_eop_direct_send(dom, onmicrosoft=(onmicrosoft or None) if res["o365"] else None)
         res["eop_host"]        = eop["eop_host"]
         res["eop_ip"]          = eop["eop_ip"]
         res["resolves"]        = eop["resolves"]
@@ -660,14 +692,22 @@ def prompt_forced():
         smtp_ip = dns.resolver.resolve(eop_host, "A")[0].to_text()
         route = f"EOP → {eop_host}"
     except Exception:
-        tenant = get_tenant_info(rcp_domain)
-        if tenant and tenant.get("tenant_name"):
-            alt_host = tenant["tenant_name"] + ".mail.protection.outlook.com"
+        eop_mx = get_eop_from_mx(rcp_domain)
+        if eop_mx:
             try:
-                smtp_ip = dns.resolver.resolve(alt_host, "A")[0].to_text()
-                route = f"EOP → {alt_host}"
+                smtp_ip = dns.resolver.resolve(eop_mx, "A")[0].to_text()
+                route = f"EOP → {eop_mx.rstrip('.')}"
             except Exception:
                 pass
+        if not smtp_ip:
+            tenant = get_tenant_info(rcp_domain)
+            if tenant and tenant.get("tenant_name"):
+                alt_host = tenant["tenant_name"] + ".mail.protection.outlook.com"
+                try:
+                    smtp_ip = dns.resolver.resolve(alt_host, "A")[0].to_text()
+                    route = f"EOP → {alt_host}"
+                except Exception:
+                    pass
     if not smtp_ip:
         smtp_ip = get_mx_record(rcp_domain)
         route = f"MX → {rcp_domain}"
@@ -733,8 +773,6 @@ def menu_check():
             related  = list(tenant.get("related_domains", [target]))
             onmicro  = f"{t_name}.onmicrosoft.com" if t_name else ""
 
-            if onmicro and onmicro not in related:
-                related.append(onmicro)
             if target not in related:
                 related.insert(0, target)
 
@@ -768,7 +806,7 @@ def menu_check():
 
         if onmicro:
             for r in results:
-                if r["domain"] != onmicro:
+                if r.get("o365"):
                     r["onmicrosoft_domain"] = onmicro
 
         print_summary_table(results)
@@ -858,8 +896,6 @@ def main():
                     t_brand = tenant.get("brand_name") or t_name
                     related = list(tenant.get("related_domains", [args.target]))
                     onmicro = f"{t_name}.onmicrosoft.com" if t_name else ""
-                    if onmicro and onmicro not in related:
-                        related.append(onmicro)
                     if args.target not in related:
                         related.insert(0, args.target)
                     domains = related
@@ -878,7 +914,7 @@ def main():
 
         if onmicro:
             for r in results:
-                if r["domain"] != onmicro:
+                if r.get("o365"):
                     r["onmicrosoft_domain"] = onmicro
 
         print_summary_table(results)
@@ -923,19 +959,28 @@ def main():
             if rcp_domain not in route_cache:
                 smtp_ip = None
                 route = ""
-                eop_host = get_eop_hostname(rcp_domain)
-                try:
-                    smtp_ip = dns.resolver.resolve(eop_host, "A")[0].to_text()
-                    route = f"EOP → {eop_host}"
-                except Exception:
-                    tenant = get_tenant_info(rcp_domain)
-                    if tenant and tenant.get("tenant_name"):
-                        alt_host = tenant["tenant_name"] + ".mail.protection.outlook.com"
-                        try:
-                            smtp_ip = dns.resolver.resolve(alt_host, "A")[0].to_text()
-                            route = f"EOP → {alt_host}"
-                        except Exception:
-                            pass
+                if args.forced:
+                    eop_host = get_eop_hostname(rcp_domain)
+                    try:
+                        smtp_ip = dns.resolver.resolve(eop_host, "A")[0].to_text()
+                        route = f"EOP → {eop_host}"
+                    except Exception:
+                        eop_mx = get_eop_from_mx(rcp_domain)
+                        if eop_mx:
+                            try:
+                                smtp_ip = dns.resolver.resolve(eop_mx, "A")[0].to_text()
+                                route = f"EOP → {eop_mx.rstrip('.')}"
+                            except Exception:
+                                pass
+                        if not smtp_ip:
+                            tenant = get_tenant_info(rcp_domain)
+                            if tenant and tenant.get("tenant_name"):
+                                alt_host = tenant["tenant_name"] + ".mail.protection.outlook.com"
+                                try:
+                                    smtp_ip = dns.resolver.resolve(alt_host, "A")[0].to_text()
+                                    route = f"EOP → {alt_host}"
+                                except Exception:
+                                    pass
                 if not smtp_ip:
                     smtp_ip = get_mx_record(rcp_domain)
                     route = f"MX → {rcp_domain}"
